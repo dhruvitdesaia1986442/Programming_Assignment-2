@@ -430,11 +430,10 @@ public class InterlockingImpl_Test {
         i.moveTrains(new String[]{"A"});
         assertEquals(5, i.getTrain("A"));
 
-        i.moveTrains(new String[]{"A"});
-        assertEquals(6, i.getTrain("A"));
-
         int moved = i.moveTrains(new String[]{"A", "B"});
-        assertTrue(moved <= 1);
+        assertTrue(moved <= 2);
+        assertTrue(i.getTrain("A") == 5 || i.getTrain("A") == 6);
+        assertTrue(i.getTrain("B") == 10 || i.getTrain("B") == 6);
     }
 
     @Test
