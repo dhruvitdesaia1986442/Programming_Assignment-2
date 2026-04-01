@@ -133,7 +133,7 @@ public class InterlockingImpl implements Interlocking {
             int current = train.getCurrentSection();
             Integer next = train.getNextSection();
 
-            // If already at destination, this move exits the train immediately.
+            // If already at destination, this move exits the train.
             if (next == null) {
                 if (train.isAtDestination()) {
                     sections.put(current, null);
@@ -190,23 +190,29 @@ public class InterlockingImpl implements Interlocking {
     }
 
     private int[] getRoute(int entry, int destination) {
-        if (entry == 1 && destination == 4) return new int[] {1, 4};
-        if (entry == 1 && destination == 8) return new int[] {1, 5, 6, 8};
-        if (entry == 1 && destination == 9) return new int[] {1, 5, 6, 9};
+        // From 1
+        if (entry == 1 && destination == 4) return new int[]{1, 4};
+        if (entry == 1 && destination == 8) return new int[]{1, 5, 6, 8};
+        if (entry == 1 && destination == 9) return new int[]{1, 5, 6, 9};
 
-        if (entry == 3 && destination == 8) return new int[] {3, 6, 8};
-        if (entry == 3 && destination == 9) return new int[] {3, 6, 9};
-        if (entry == 3 && destination == 11) return new int[] {3, 7, 11};
+        // From 3
+        if (entry == 3 && destination == 8) return new int[]{3, 6, 8};
+        if (entry == 3 && destination == 9) return new int[]{3, 6, 9};
+        if (entry == 3 && destination == 11) return new int[]{3, 7, 11};
 
-        if (entry == 4 && destination == 2) return new int[] {4, 1, 5, 6, 2};
-        if (entry == 4 && destination == 3) return new int[] {4, 1, 5, 6, 7, 3};
+        // From 4
+        if (entry == 4 && destination == 2) return new int[]{4, 1, 5, 6, 2};
+        if (entry == 4 && destination == 3) return new int[]{4, 1, 5, 6, 7, 3};
 
-        if (entry == 9 && destination == 2) return new int[] {9, 6, 2};
-        if (entry == 10 && destination == 2) return new int[] {10, 6, 2};
+        // From 9
+        if (entry == 9 && destination == 2) return new int[]{9, 6, 2};
 
-        // Fix: first move must be 11 -> 9
-        if (entry == 11 && destination == 2) return new int[] {11, 9, 6, 2};
-        if (entry == 11 && destination == 3) return new int[] {11, 7, 3};
+        // From 10
+        if (entry == 10 && destination == 2) return new int[]{10, 6, 2};
+
+        // From 11
+        if (entry == 11 && destination == 2) return new int[]{11, 9, 6, 2};
+        if (entry == 11 && destination == 3) return new int[]{11, 7, 3};
 
         return null;
     }
@@ -225,18 +231,22 @@ public class InterlockingImpl implements Interlocking {
             return false;
         }
 
+        // Prevent direct opposite-edge swap in same round
         if (usedEdgesThisRound.contains(edgeKey(next, current))) {
             return false;
         }
 
+        // Shared area around 6: allow only one move using section 6 per round
         if (usesSection6(current, next) && section6UsedThisRound) {
             return false;
         }
 
+        // Shared area around 7: allow only one move using section 7 per round
         if (usesSection7(current, next) && section7UsedThisRound) {
             return false;
         }
 
+        // Passenger priority only on section 7
         if (!isPassenger(train) && usesSection7(current, next) && passengerNeedsSection7) {
             return false;
         }
