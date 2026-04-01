@@ -1,23 +1,14 @@
 public interface Interlocking {
 
-    // "This method adds a train into the railway system"
-    // "trainName → unique name of the train"
-    // "entryTrackSection → starting section of the train"
-    // "destinationTrackSection → final section where train exits"
+    // Add a train with a valid entry and destination section
     void addTrain(String trainName, int entryTrackSection, int destinationTrackSection);
 
-    // "This method moves given trains one step forward"
-    // "trainNames → array of train names to be moved"
-    // "Returns number of trains successfully moved"
+    // Move the listed trains by at most one section each
     int moveTrains(String[] trainNames);
 
-    // "This method returns which train is occupying a section"
-    // "trackSection → section number (1–11)"
-    // "Returns train name OR null if empty"
+    // Return the train currently occupying a section, or null
     String getSection(int trackSection);
 
-    // "This method returns the current section of a train"
-    // "trainName → name of the train"
-    // "Returns section number OR -1 if train has exited"
+    // Return current train section, or -1 if it exited
     int getTrain(String trainName);
 }

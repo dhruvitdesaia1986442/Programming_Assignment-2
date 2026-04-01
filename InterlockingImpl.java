@@ -5,10 +5,10 @@ import java.util.Set;
 
 public class InterlockingImpl implements Interlocking {
 
-    // Train has exited system
+    // Returned by getTrain when a known train has exited
     private static final int OUT_OF_SYSTEM = -1;
 
-    // Internal train object to store train state
+    // Internal train record
     private static class Train {
         String name;
         int entry;
@@ -25,16 +25,15 @@ public class InterlockingImpl implements Interlocking {
         }
     }
 
-    // Map: section number -> train name occupying it
+    // Section -> occupying train name
     private final Map<Integer, String> sections;
 
-    // Map: active train name -> train object
+    // Active trains currently in the system
     private final Map<String, Train> activeTrains;
 
-    // Keeps all train names ever added so exited trains can return -1
+    // All train names ever added, so exited trains can return -1
     private final Set<String> allTrainNames;
 
-    // Constructor initializes all 11 sections as empty
     public InterlockingImpl() {
         sections = new HashMap<>();
         activeTrains = new HashMap<>();
@@ -49,30 +48,29 @@ public class InterlockingImpl implements Interlocking {
     public void addTrain(String trainName, int entryTrackSection, int destinationTrackSection) {
         // Validate train name
         if (trainName == null || trainName.trim().isEmpty()) {
-            throw new IllegalArgumentException();
+            throw new IllegalArgumentException("Invalid train name.");
         }
 
         // Validate section numbers
         if (!sections.containsKey(entryTrackSection) || !sections.containsKey(destinationTrackSection)) {
-            throw new IllegalArgumentException();
+            throw new IllegalArgumentException("Invalid section.");
         }
 
-        // Reject duplicate train names
+        // Reject duplicate names
         if (allTrainNames.contains(trainName) || activeTrains.containsKey(trainName)) {
-            throw new IllegalArgumentException();
+            throw new IllegalArgumentException("Duplicate train name.");
         }
 
-        // Reject occupied entry section
+        // Entry section must be empty
         if (sections.get(entryTrackSection) != null) {
-            throw new IllegalStateException();
+            throw new IllegalStateException("Entry section occupied.");
         }
 
-        // Check whether the entry/destination pair is legal
+        // Entry/destination pair must be legal
         if (!isValidJourney(entryTrackSection, destinationTrackSection)) {
-            throw new IllegalArgumentException();
+            throw new IllegalArgumentException("Invalid journey.");
         }
 
-        // Create and register train
         Train train = new Train(trainName, entryTrackSection, destinationTrackSection);
         activeTrains.put(trainName, train);
         allTrainNames.add(trainName);
@@ -81,15 +79,14 @@ public class InterlockingImpl implements Interlocking {
 
     @Override
     public int moveTrains(String[] trainNames) {
-        // Null array is invalid
         if (trainNames == null) {
-            throw new IllegalArgumentException();
+            throw new IllegalArgumentException("Null train list.");
         }
 
         int movedCount = 0;
         Set<String> movedThisRound = new HashSet<>();
 
-        // Check if any passenger train needs crossover priority this round
+        // Passenger on crossover gets priority over freight on crossover
         boolean passengerNeedsCrossover = false;
         for (String name : trainNames) {
             Train t = activeTrains.get(name);
@@ -102,16 +99,12 @@ public class InterlockingImpl implements Interlocking {
             }
         }
 
-        // Try moving trains in the given order
         for (String name : trainNames) {
-            // Ignore null names and duplicate names in same round
             if (name == null || movedThisRound.contains(name)) {
                 continue;
             }
 
             Train t = activeTrains.get(name);
-
-            // Ignore trains not active / not found
             if (t == null || !t.active) {
                 continue;
             }
@@ -131,12 +124,10 @@ public class InterlockingImpl implements Interlocking {
                 continue;
             }
 
-            // Move only if safe
             if (!canMove(t, next, passengerNeedsCrossover)) {
                 continue;
             }
 
-            // Update occupancy
             sections.put(t.currentSection, null);
             t.currentSection = next;
             sections.put(next, t.name);
@@ -150,36 +141,31 @@ public class InterlockingImpl implements Interlocking {
 
     @Override
     public String getSection(int trackSection) {
-        // Invalid section
         if (!sections.containsKey(trackSection)) {
-            throw new IllegalArgumentException();
+            throw new IllegalArgumentException("Invalid section.");
         }
         return sections.get(trackSection);
     }
 
     @Override
     public int getTrain(String trainName) {
-        // Invalid train name
         if (trainName == null || trainName.trim().isEmpty()) {
-            throw new IllegalArgumentException();
+            throw new IllegalArgumentException("Invalid train name.");
         }
 
-        // Active train -> return current section
         Train t = activeTrains.get(trainName);
         if (t != null) {
             return t.currentSection;
         }
 
-        // Exited train -> return -1
         if (allTrainNames.contains(trainName)) {
             return OUT_OF_SYSTEM;
         }
 
-        // Unknown train
-        throw new IllegalArgumentException();
+        throw new IllegalArgumentException("Unknown train.");
     }
 
-    // Valid start/destination combinations
+    // Allowed entry/destination pairs
     private boolean isValidJourney(int entry, int destination) {
         return (entry == 1 && destination == 4)
             || (entry == 1 && destination == 8)
@@ -195,7 +181,7 @@ public class InterlockingImpl implements Interlocking {
             || (entry == 11 && destination == 3);
     }
 
-    // Freight routes are these four; everything else is passenger
+    // Freight-only journeys
     private boolean isPassenger(Train t) {
         return !((t.entry == 1 && t.destination == 4)
               || (t.entry == 3 && t.destination == 11)
@@ -203,12 +189,11 @@ public class InterlockingImpl implements Interlocking {
               || (t.entry == 11 && t.destination == 3));
     }
 
-    // Chooses next section dynamically, one step at a time
+    // Choose the next section dynamically, one transition at a time
     private Integer chooseNextSection(Train t) {
         int current = t.currentSection;
         int destination = t.destination;
 
-        // Already at destination
         if (current == destination) {
             return null;
         }
@@ -262,21 +247,21 @@ public class InterlockingImpl implements Interlocking {
         return null;
     }
 
-    // Safety rules before movement
+    // Safety rules
     private boolean canMove(Train t, int next, boolean passengerNeedsCrossover) {
         int current = t.currentSection;
 
-        // Block if next section occupied
+        // Next section must be empty
         if (sections.get(next) != null) {
             return false;
         }
 
-        // Freight must wait if passenger needs crossover
+        // Freight waits if passenger needs the crossover
         if (!isPassenger(t) && isCrossoverEdge(current, next) && passengerNeedsCrossover) {
             return false;
         }
 
-        // Prevent head-on swap
+        // Prevent direct head-on swap
         for (Train other : activeTrains.values()) {
             if (other == t || !other.active) {
                 continue;
@@ -292,7 +277,7 @@ public class InterlockingImpl implements Interlocking {
             }
         }
 
-        // Prevent two trains using turnout near section 6 at once
+        // Prevent simultaneous turnout conflicts near section 6
         if (isTurnoutEdge(current, next)) {
             for (Train other : activeTrains.values()) {
                 if (other == t || !other.active) {
@@ -313,12 +298,12 @@ public class InterlockingImpl implements Interlocking {
         return true;
     }
 
-    // Crossover edge between sections 3 and 7
+    // Freight crossover edge
     private boolean isCrossoverEdge(int current, int next) {
         return (current == 3 && next == 7) || (current == 7 && next == 3);
     }
 
-    // Turnout-related edges around section 6
+    // Turnout area edges around section 6
     private boolean isTurnoutEdge(int current, int next) {
         return (current == 6 && (next == 8 || next == 9))
             || ((current == 8 || current == 9) && next == 6)
