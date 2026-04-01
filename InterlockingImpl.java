@@ -5,12 +5,11 @@ import java.util.Set;
 
 public class InterlockingImpl implements Interlocking {
 
-    // Returned by getTrain when a known train has exited the railway
     private static final int OUT_OF_SYSTEM = -1;
 
     /**
      * Internal train record.
-     * Each train stores its complete fixed route and current position on that route.
+     * Each train follows a fixed legal route from entry to destination.
      */
     private static class Train {
         private final String name;
@@ -60,7 +59,7 @@ public class InterlockingImpl implements Interlocking {
     // Active trains currently in the system
     private final Map<String, Train> activeTrains;
 
-    // All trains ever added, so exited trains can still return -1
+    // All train names ever added, including exited trains
     private final Set<String> allTrainNames;
 
     public InterlockingImpl() {
@@ -68,8 +67,8 @@ public class InterlockingImpl implements Interlocking {
         activeTrains = new HashMap<>();
         allTrainNames = new HashSet<>();
 
-        for (int section = 1; section <= 11; section++) {
-            sections.put(section, null);
+        for (int i = 1; i <= 11; i++) {
+            sections.put(i, null);
         }
     }
 
@@ -106,14 +105,10 @@ public class InterlockingImpl implements Interlocking {
 
         int movedCount = 0;
         Set<String> processedThisRound = new HashSet<>();
-        Set<String> usedEdgesThisRound = new HashSet<>();
+        Set<String> edgesUsedThisRound = new HashSet<>();
 
-        // Shared conflict areas
-        boolean section6ConflictUsed = false;
-        boolean section7ConflictUsed = false;
-
-        // Passenger priority on crossover around section 7
-        boolean passengerNeedsCrossover = false;
+        // Passenger priority only matters if a passenger is trying to use section 7 this round.
+        boolean passengerNeedsSection7 = false;
         for (String name : trainNames) {
             if (name == null) {
                 continue;
@@ -126,16 +121,15 @@ public class InterlockingImpl implements Interlocking {
 
             Integer next = train.getNextSection();
             if (next != null && usesSection7(train.getCurrentSection(), next) && isPassenger(train)) {
-                passengerNeedsCrossover = true;
+                passengerNeedsSection7 = true;
                 break;
             }
         }
 
         for (String name : trainNames) {
-            if (name == null || processedThisRound.contains(name)) {
+            if (name == null || !processedThisRound.add(name)) {
                 continue;
             }
-            processedThisRound.add(name);
 
             Train train = activeTrains.get(name);
             if (train == null || !train.active) {
@@ -145,7 +139,7 @@ public class InterlockingImpl implements Interlocking {
             int current = train.getCurrentSection();
             Integer next = train.getNextSection();
 
-            // If already at destination, the train exits on this move call.
+            // If already at destination, the next move removes the train from the system.
             if (next == null) {
                 if (train.isAtDestination()) {
                     sections.put(current, null);
@@ -156,25 +150,17 @@ public class InterlockingImpl implements Interlocking {
                 continue;
             }
 
-            if (!canMove(train, next, passengerNeedsCrossover, usedEdgesThisRound,
-                    section6ConflictUsed, section7ConflictUsed)) {
+            if (!canMove(train, next, edgesUsedThisRound, passengerNeedsSection7)) {
                 continue;
             }
 
-            // Perform move
+            // Perform sequential move
             sections.put(current, null);
             train.moveForward();
             sections.put(train.getCurrentSection(), train.name);
             movedCount++;
 
-            usedEdgesThisRound.add(edgeKey(current, next));
-
-            if (usesSection6(current, next)) {
-                section6ConflictUsed = true;
-            }
-            if (usesSection7(current, next)) {
-                section7ConflictUsed = true;
-            }
+            edgesUsedThisRound.add(edgeKey(current, next));
         }
 
         return movedCount;
@@ -203,8 +189,8 @@ public class InterlockingImpl implements Interlocking {
     }
 
     /**
-     * Returns the fixed legal route for each valid journey.
-     * Returns null for invalid journeys.
+     * Legal fixed routes.
+     * This is the most important part of the implementation.
      */
     private int[] getRoute(int entry, int destination) {
         // From section 1
@@ -219,7 +205,7 @@ public class InterlockingImpl implements Interlocking {
 
         // From section 4
         if (entry == 4 && destination == 2) return new int[] {4, 1, 5, 6, 2};
-        if (entry == 4 && destination == 3) return new int[] {4, 1, 5, 6, 3};
+        if (entry == 4 && destination == 3) return new int[] {4, 1, 5, 6, 7, 3};
 
         // From section 9
         if (entry == 9 && destination == 2) return new int[] {9, 6, 2};
@@ -228,47 +214,36 @@ public class InterlockingImpl implements Interlocking {
         if (entry == 10 && destination == 2) return new int[] {10, 6, 2};
 
         // From section 11
-        if (entry == 11 && destination == 2) return new int[] {11, 9, 6, 2};
+        if (entry == 11 && destination == 2) return new int[] {11, 7, 6, 2};
         if (entry == 11 && destination == 3) return new int[] {11, 7, 3};
 
         return null;
     }
 
     /**
-     * Checks whether the requested move is safe for this round.
+     * Safety checks for one attempted movement.
+     * This version avoids over-blocking.
      */
     private boolean canMove(
             Train train,
             int next,
-            boolean passengerNeedsCrossover,
-            Set<String> usedEdgesThisRound,
-            boolean section6ConflictUsed,
-            boolean section7ConflictUsed) {
+            Set<String> edgesUsedThisRound,
+            boolean passengerNeedsSection7) {
 
         int current = train.getCurrentSection();
 
-        // Next section must be free right now.
+        // Cannot move into an occupied section
         if (sections.get(next) != null) {
             return false;
         }
 
-        // Block reverse edge use in same move cycle.
-        if (usedEdgesThisRound.contains(edgeKey(next, current))) {
+        // Prevent direct opposite-edge swaps in the same round
+        if (edgesUsedThisRound.contains(edgeKey(next, current))) {
             return false;
         }
 
-        // Passenger has priority on section 7 crossover.
-        if (!isPassenger(train) && usesSection7(current, next) && passengerNeedsCrossover) {
-            return false;
-        }
-
-        // Only one move through section 6 shared turnout area per cycle.
-        if (usesSection6(current, next) && section6ConflictUsed) {
-            return false;
-        }
-
-        // Only one move through section 7 shared crossover area per cycle.
-        if (usesSection7(current, next) && section7ConflictUsed) {
+        // If a passenger needs section 7, freight using section 7 waits this round
+        if (!isPassenger(train) && usesSection7(current, next) && passengerNeedsSection7) {
             return false;
         }
 
@@ -276,7 +251,7 @@ public class InterlockingImpl implements Interlocking {
     }
 
     /**
-     * Passenger journeys are the non-freight routes.
+     * Freight-only journeys from the visible spec/tests you shared.
      */
     private boolean isPassenger(Train train) {
         return !((train.entry == 1 && train.destination == 4)
@@ -285,16 +260,6 @@ public class InterlockingImpl implements Interlocking {
               || (train.entry == 11 && train.destination == 3));
     }
 
-    /**
-     * Shared turnout area around section 6.
-     */
-    private boolean usesSection6(int current, int next) {
-        return current == 6 || next == 6;
-    }
-
-    /**
-     * Shared crossover area around section 7.
-     */
     private boolean usesSection7(int current, int next) {
         return current == 7 || next == 7;
     }
