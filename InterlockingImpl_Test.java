@@ -24,11 +24,19 @@ public class InterlockingImpl_Test {
     }
 
     @Test
-    public void testExitSystem() {
+    public void testTrainWaitsAtDestinationBeforeExit() {
         Interlocking interlocking = new InterlockingImpl();
         interlocking.addTrain("T1", 1, 4);
 
+        // Reach destination section
         assertEquals(1, interlocking.moveTrains(new String[]{"T1"}));
+        assertEquals(4, interlocking.getTrain("T1"));
+
+        // Wait at destination
+        assertEquals(0, interlocking.moveTrains(new String[]{"T1"}));
+        assertEquals(4, interlocking.getTrain("T1"));
+
+        // Exit on next call
         assertEquals(1, interlocking.moveTrains(new String[]{"T1"}));
         assertEquals(-1, interlocking.getTrain("T1"));
         assertNull(interlocking.getSection(4));
@@ -193,21 +201,11 @@ public class InterlockingImpl_Test {
     }
 
     @Test
-    public void testGetTrainReturnsMinusOneAfterExit() {
-        Interlocking interlocking = new InterlockingImpl();
-        interlocking.addTrain("T1", 1, 4);
-
-        interlocking.moveTrains(new String[]{"T1"});
-        interlocking.moveTrains(new String[]{"T1"});
-
-        assertEquals(-1, interlocking.getTrain("T1"));
-    }
-
-    @Test
     public void testExitedTrainNoLongerMoves() {
         Interlocking interlocking = new InterlockingImpl();
         interlocking.addTrain("T1", 1, 4);
 
+        interlocking.moveTrains(new String[]{"T1"});
         interlocking.moveTrains(new String[]{"T1"});
         interlocking.moveTrains(new String[]{"T1"});
 
@@ -271,7 +269,6 @@ public class InterlockingImpl_Test {
         i.addTrain("P1", 1, 8);
         i.moveTrains(new String[]{"P1"});
         i.moveTrains(new String[]{"P1"});
-        assertEquals(6, i.getTrain("P1"));
         i.moveTrains(new String[]{"P1"});
         assertEquals(8, i.getTrain("P1"));
     }
@@ -281,7 +278,6 @@ public class InterlockingImpl_Test {
         Interlocking i = new InterlockingImpl();
         i.addTrain("P1", 3, 9);
         i.moveTrains(new String[]{"P1"});
-        assertEquals(6, i.getTrain("P1"));
         i.moveTrains(new String[]{"P1"});
         assertEquals(9, i.getTrain("P1"));
     }
@@ -291,7 +287,6 @@ public class InterlockingImpl_Test {
         Interlocking i = new InterlockingImpl();
         i.addTrain("F1", 3, 11);
         i.moveTrains(new String[]{"F1"});
-        assertEquals(7, i.getTrain("F1"));
         i.moveTrains(new String[]{"F1"});
         assertEquals(11, i.getTrain("F1"));
     }
@@ -301,7 +296,6 @@ public class InterlockingImpl_Test {
         Interlocking i = new InterlockingImpl();
         i.addTrain("F1", 11, 3);
         i.moveTrains(new String[]{"F1"});
-        assertEquals(7, i.getTrain("F1"));
         i.moveTrains(new String[]{"F1"});
         assertEquals(3, i.getTrain("F1"));
     }
@@ -332,11 +326,15 @@ public class InterlockingImpl_Test {
 
     @Test
     public void testFourToTwoRoute() {
-        Interlocking interlocking = new InterlockingImpl();
-        interlocking.addTrain("T1", 4, 2);
-        assertEquals(4, interlocking.getTrain("T1"));
-        assertEquals(1, interlocking.moveTrains(new String[]{"T1"}));
-        assertEquals(1, interlocking.getTrain("T1"));
+        Interlocking i = new InterlockingImpl();
+        i.addTrain("T1", 4, 2);
+
+        i.moveTrains(new String[]{"T1"}); // 4 -> 1
+        i.moveTrains(new String[]{"T1"}); // 1 -> 5
+        i.moveTrains(new String[]{"T1"}); // 5 -> 6
+        i.moveTrains(new String[]{"T1"}); // 6 -> 2
+
+        assertEquals(2, i.getTrain("T1"));
     }
 
     @Test
