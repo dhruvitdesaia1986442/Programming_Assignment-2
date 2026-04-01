@@ -1,23 +1,23 @@
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
 public interface Interlocking {
 
-    // Add a train into the system
-     void addTrain(String trainName, String trainType, int entrySection, String direction);
+    // "This method adds a train into the railway system"
+    // "trainName → unique name of the train"
+    // "entryTrackSection → starting section of the train"
+    // "destinationTrackSection → final section where train exits"
+    void addTrain(String trainName, int entryTrackSection, int destinationTrackSection);
 
-    // Move one train forward (one section)
-     boolean moveTrain(String trainName);
+    // "This method moves given trains one step forward"
+    // "trainNames → array of train names to be moved"
+    // "Returns number of trains successfully moved"
+    int moveTrains(String[] trainNames);
 
-    // Move all trains (used for simulation)
-   List<String> moveAllTrains();
+    // "This method returns which train is occupying a section"
+    // "trackSection → section number (1–11)"
+    // "Returns train name OR null if empty"
+    String getSection(int trackSection);
 
-    // Get current section of a train
-   int getTrainSection(String trainName);
-    // Get full track occupancy
-    Map<Integer, String> getSectionOccupancy();
-
-    // Get all active trains
-     Set<String> getActiveTrains();
+    // "This method returns the current section of a train"
+    // "trainName → name of the train"
+    // "Returns section number OR -1 if train has exited"
+    int getTrain(String trainName);
 }

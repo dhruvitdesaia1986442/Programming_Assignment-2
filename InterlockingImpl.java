@@ -1,445 +1,282 @@
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
-import java.util.List;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
-import java.util.TreeSet;
 
 public class InterlockingImpl implements Interlocking {
 
-    // -----------------------------
-    // STEP 1: Train type definition
-    // -----------------------------
-    private enum TrainType {
-        PASSENGER,
-        FREIGHT
-    }
+    // "Constant indicating train has exited system"
+    private static final int OUT_OF_SYSTEM = -1;
 
-    // -----------------------------
-    // STEP 2: Direction definition
-    // -----------------------------
-    private enum Direction {
-        SOUTH,
-        NORTH
-    }
-
-    // -----------------------------
-    // STEP 3: Internal Train class
-    // Stores train details and route
-    // -----------------------------
+    // "Train class stores state and route information"
     private static class Train {
-        private final String name;
-        private final TrainType type;
-        private final Direction direction;
-        private final List<Integer> route;
-        private int index;
+        String name;                 // "Train name"
+        int entry;                  // "Entry section"
+        int destination;            // "Destination section"
+        int currentSection;         // "Current position"
+        int[] route;                // "Route path"
+        int routeIndex;             // "Current index in route"
+        boolean active;             // "Is train active"
 
-        Train(String name, TrainType type, Direction direction, List<Integer> route) {
+        // "Constructor initializes train properties"
+        Train(String name, int entry, int destination, int[] route) {
             this.name = name;
-            this.type = type;
-            this.direction = direction;
+            this.entry = entry;
+            this.destination = destination;
+            this.currentSection = entry;
             this.route = route;
-            this.index = 0;
-        }
-
-        int currentSection() {
-            return route.get(index);
-        }
-
-        boolean hasNext() {
-            return index < route.size() - 1;
-        }
-
-        int nextSection() {
-            return route.get(index + 1);
-        }
-
-        void advance() {
-            index++;
+            this.routeIndex = 0;
+            this.active = true;
         }
     }
 
-    // -----------------------------
-    // STEP 4: Track section occupancy
-    // section number -> train name
-    // -----------------------------
+    // "Map storing section occupancy"
     private final Map<Integer, String> sections;
 
-    // -----------------------------
-    // STEP 5: Active trains storage
-    // train name -> train object
-    // -----------------------------
-    private final Map<String, Train> trains;
+    // "Active trains in system"
+    private final Map<String, Train> activeTrains;
 
-    // -----------------------------
-    // STEP 6: Passenger priority tracking
-    // Used at crossover junction
-    // -----------------------------
-    private final Set<String> passengerWaitingAtCrossover;
+    // "All trains ever added (used to track exited trains)"
+    private final Set<String> allTrainNames;
 
-    // -----------------------------
-    // STEP 7: Constructor
-    // Initialise all 11 sections as empty
-    // -----------------------------
+    // "Constructor initializes empty track sections"
     public InterlockingImpl() {
-        sections = new HashMap<Integer, String>();
-        trains = new HashMap<String, Train>();
-        passengerWaitingAtCrossover = new TreeSet<String>();
+        sections = new HashMap<>();
+        activeTrains = new HashMap<>();
+        allTrainNames = new HashSet<>();
 
+        // "Initialize sections 1 to 11 as empty"
         for (int i = 1; i <= 11; i++) {
             sections.put(i, null);
         }
     }
 
-    // -----------------------------
-    // STEP 8: Add train into system
-    // Includes all validations
-    // -----------------------------
+    // "Add train to system"
     @Override
-    public void addTrain(String trainName, String trainType, int entrySection, String direction) {
-        validateTrainName(trainName);
+    public void addTrain(String trainName, int entry, int destination) {
 
-        TrainType type = parseTrainType(trainType);
-        Direction dir = parseDirection(direction);
-
-        List<Integer> route = getRoute(type, dir, entrySection);
-        if (route == null || route.isEmpty()) {
-            throw new IllegalArgumentException("Invalid entry section for train type and direction.");
-        }
-
-        int startSection = route.get(0);
-
-        // -----------------------------
-        // STEP 9: Entry section occupancy check
-        // -----------------------------
-        if (sections.get(startSection) != null) {
-            throw new IllegalStateException("Entry section is already occupied.");
-        }
-
-        Train train = new Train(trainName, type, dir, route);
-        trains.put(trainName, train);
-        sections.put(startSection, trainName);
-    }
-
-    // -----------------------------
-    // STEP 10: Move one train forward
-    // -----------------------------
-    @Override
-    public boolean moveTrain(String trainName) {
-        Train train = getTrain(trainName);
-
-        // -----------------------------
-        // STEP 11: Exit logic
-        // Remove train when route is complete
-        // -----------------------------
-        if (!train.hasNext()) {
-            sections.put(train.currentSection(), null);
-            trains.remove(trainName);
-            passengerWaitingAtCrossover.remove(trainName);
-            return true;
-        }
-
-        int current = train.currentSection();
-        int next = train.nextSection();
-
-        // -----------------------------
-        // STEP 12: Passenger priority detection
-        // -----------------------------
-        if (isPassengerCrossoverMove(train, current, next)) {
-            passengerWaitingAtCrossover.add(train.name);
-        }
-
-        // -----------------------------
-        // STEP 13: Safety check before moving
-        // -----------------------------
-        if (!canMove(train, current, next)) {
-            return false;
-        }
-
-        // -----------------------------
-        // STEP 14: Perform train movement
-        // -----------------------------
-        sections.put(current, null);
-        train.advance();
-        sections.put(train.currentSection(), train.name);
-
-        if (!isApproachingCrossover(train)) {
-            passengerWaitingAtCrossover.remove(train.name);
-        }
-
-        return true;
-    }
-
-    // -----------------------------
-    // STEP 15: Move all trains
-    // Passenger trains get priority
-    // -----------------------------
-    @Override
-    public List<String> moveAllTrains() {
-        List<Train> ordered = new ArrayList<Train>(trains.values());
-
-        // -----------------------------
-        // STEP 16: Sort trains for priority
-        // -----------------------------
-        ordered.sort((a, b) -> {
-            boolean aPriority = isApproachingCrossover(a) && a.type == TrainType.PASSENGER;
-            boolean bPriority = isApproachingCrossover(b) && b.type == TrainType.PASSENGER;
-
-            if (aPriority && !bPriority) {
-                return -1;
-            }
-            if (!aPriority && bPriority) {
-                return 1;
-            }
-            if (a.type != b.type) {
-                return a.type == TrainType.PASSENGER ? -1 : 1;
-            }
-            return a.name.compareTo(b.name);
-        });
-
-        List<String> moved = new ArrayList<String>();
-        for (Train train : ordered) {
-            if (trains.containsKey(train.name) && moveTrain(train.name)) {
-                moved.add(train.name);
-            }
-        }
-        return moved;
-    }
-
-    // -----------------------------
-    // STEP 17: Get train section
-    // -----------------------------
-    @Override
-    public int getTrainSection(String trainName) {
-        return getTrain(trainName).currentSection();
-    }
-
-    // -----------------------------
-    // STEP 18: Get section occupancy
-    // -----------------------------
-    @Override
-    public Map<Integer, String> getSectionOccupancy() {
-        return new TreeMap<Integer, String>(sections);
-    }
-
-    // -----------------------------
-    // STEP 19: Get active trains
-    // -----------------------------
-    @Override
-    public Set<String> getActiveTrains() {
-        return new TreeSet<String>(trains.keySet());
-    }
-
-    // -----------------------------
-    // STEP 20: Train name validation
-    // -----------------------------
-    private void validateTrainName(String trainName) {
+        // "Validate train name"
         if (trainName == null || trainName.trim().isEmpty()) {
-            throw new IllegalArgumentException("Train name cannot be empty.");
+            throw new IllegalArgumentException();
         }
-        if (trains.containsKey(trainName)) {
-            throw new IllegalArgumentException("Duplicate train name.");
+
+        // "Validate sections"
+        if (!sections.containsKey(entry) || !sections.containsKey(destination)) {
+            throw new IllegalArgumentException();
         }
+
+        // "Reject duplicate trains"
+        if (allTrainNames.contains(trainName) || activeTrains.containsKey(trainName)) {
+            throw new IllegalArgumentException();
+        }
+
+        // "Check if entry section is occupied"
+        if (sections.get(entry) != null) {
+            throw new IllegalStateException();
+        }
+
+        // "Get valid route"
+        int[] route = chooseRoute(entry, destination);
+        if (route == null) {
+            throw new IllegalArgumentException();
+        }
+
+        // "Create train and store"
+        Train train = new Train(trainName, entry, destination, route);
+        activeTrains.put(trainName, train);
+        allTrainNames.add(trainName);
+
+        // "Mark section occupied"
+        sections.put(entry, trainName);
     }
 
-    // -----------------------------
-    // STEP 21: Get train helper
-    // -----------------------------
-    private Train getTrain(String trainName) {
-        Train train = trains.get(trainName);
-        if (train == null) {
-            throw new IllegalArgumentException("Train not found.");
-        }
-        return train;
-    }
+    // "Move trains forward"
+    @Override
+    public int moveTrains(String[] trainNames) {
 
-    // -----------------------------
-    // STEP 22: Parse train type
-    // -----------------------------
-    private TrainType parseTrainType(String trainType) {
-        if (trainType == null) {
-            throw new IllegalArgumentException("Train type cannot be null.");
-        }
-        if ("passenger".equalsIgnoreCase(trainType)) {
-            return TrainType.PASSENGER;
-        }
-        if ("freight".equalsIgnoreCase(trainType)) {
-            return TrainType.FREIGHT;
-        }
-        throw new IllegalArgumentException("Invalid train type.");
-    }
-
-    // -----------------------------
-    // STEP 23: Parse direction
-    // -----------------------------
-    private Direction parseDirection(String direction) {
-        if (direction == null) {
-            throw new IllegalArgumentException("Direction cannot be null.");
-        }
-        if ("south".equalsIgnoreCase(direction)) {
-            return Direction.SOUTH;
-        }
-        if ("north".equalsIgnoreCase(direction)) {
-            return Direction.NORTH;
-        }
-        throw new IllegalArgumentException("Invalid direction.");
-    }
-
-    // -----------------------------
-    // STEP 24: Main safety logic
-    // -----------------------------
-    private boolean canMove(Train train, int current, int next) {
-
-        // -----------------------------
-        // STEP 25: Collision prevention
-        // Train cannot enter occupied section
-        // -----------------------------
-        if (sections.get(next) != null) {
-            return false;
+        // "Validate input"
+        if (trainNames == null) {
+            throw new IllegalArgumentException();
         }
 
-        // -----------------------------
-        // STEP 26: Passenger priority at crossover
-        // Freight must wait
-        // -----------------------------
-        if (isFreightCrossoverMove(train, current, next) && hasPassengerWaitingAtCrossover()) {
-            return false;
-        }
+        int moved = 0;
 
-        // -----------------------------
-        // STEP 27: Prevent simple head-on swap
-        // -----------------------------
-        if (wouldSwapHeadOn(current, next, train.name)) {
-            return false;
-        }
+        // "Track already moved trains"
+        Set<String> movedThisRound = new HashSet<>();
 
-        return true;
-    }
-
-    // -----------------------------
-    // STEP 28: Check waiting passenger
-    // -----------------------------
-    private boolean hasPassengerWaitingAtCrossover() {
-        return !passengerWaitingAtCrossover.isEmpty();
-    }
-
-    // -----------------------------
-    // STEP 29: Passenger crossover move
-    // -----------------------------
-    private boolean isPassengerCrossoverMove(Train train, int current, int next) {
-        return train.type == TrainType.PASSENGER && isCrossoverEdge(current, next);
-    }
-
-    // -----------------------------
-    // STEP 30: Freight crossover move
-    // -----------------------------
-    private boolean isFreightCrossoverMove(Train train, int current, int next) {
-        return train.type == TrainType.FREIGHT && isCrossoverEdge(current, next);
-    }
-
-    // -----------------------------
-    // STEP 31: Approaching crossover
-    // -----------------------------
-    private boolean isApproachingCrossover(Train train) {
-        if (!train.hasNext()) {
-            return false;
-        }
-        return train.type == TrainType.PASSENGER
-                && isCrossoverEdge(train.currentSection(), train.nextSection());
-    }
-
-    // -----------------------------
-    // STEP 32: Crossover edge definition
-    // -----------------------------
-    private boolean isCrossoverEdge(int current, int next) {
-        return (current == 3 && next == 7) || (current == 7 && next == 3);
-    }
-
-    // -----------------------------
-    // STEP 33: Head-on swap prevention
-    // -----------------------------
-    private boolean wouldSwapHeadOn(int current, int next, String movingTrainName) {
-        for (Train other : trains.values()) {
-            if (other.name.equals(movingTrainName)) {
-                continue;
-            }
-            if (other.hasNext()) {
-                int otherCurrent = other.currentSection();
-                int otherNext = other.nextSection();
-                if (otherCurrent == next && otherNext == current) {
-                    return true;
+        // "Check passenger priority at crossover"
+        boolean passengerPriority = false;
+        for (String name : trainNames) {
+            Train t = activeTrains.get(name);
+            if (t != null && hasNext(t)) {
+                if (isPassenger(t) && isCrossover(t)) {
+                    passengerPriority = true;
+                    break;
                 }
             }
         }
-        return false;
+
+        for (String name : trainNames) {
+
+            // "Skip invalid or duplicate entries"
+            if (name == null || movedThisRound.contains(name)) continue;
+
+            Train t = activeTrains.get(name);
+
+            // "Skip if train not active"
+            if (t == null || !t.active) continue;
+
+            // "Exit logic"
+            if (!hasNext(t)) {
+                sections.put(t.currentSection, null);
+                t.currentSection = OUT_OF_SYSTEM;
+                t.active = false;
+                activeTrains.remove(name);
+
+                moved++;
+                movedThisRound.add(name);
+                continue;
+            }
+
+            int current = t.currentSection;
+            int next = nextSection(t);
+
+            // "Check if movement is safe"
+            if (!canMove(t, current, next, passengerPriority)) continue;
+
+            // "Perform move"
+            sections.put(current, null);
+            t.routeIndex++;
+            t.currentSection = next;
+            sections.put(next, t.name);
+
+            moved++;
+            movedThisRound.add(name);
+        }
+
+        return moved;
+    }
+
+    // "Get section occupancy"
+    @Override
+    public String getSection(int section) {
+        if (!sections.containsKey(section)) {
+            throw new IllegalArgumentException();
+        }
+        return sections.get(section);
+    }
+
+    // "Get train position"
+    @Override
+    public int getTrain(String trainName) {
+
+        // "Validate train name"
+        if (trainName == null || trainName.trim().isEmpty()) {
+            throw new IllegalArgumentException();
+        }
+
+        Train t = activeTrains.get(trainName);
+
+        // "If train is active"
+        if (t != null) return t.currentSection;
+
+        // "If train exited"
+        if (allTrainNames.contains(trainName)) return OUT_OF_SYSTEM;
+
+        // "Unknown train"
+        throw new IllegalArgumentException();
     }
 
     // -----------------------------
-    // STEP 34: ROUTES (IMPORTANT)
-    // Defines legal train paths only
+    // "Helper methods"
     // -----------------------------
-    private List<Integer> getRoute(TrainType type, Direction direction, int entrySection) {
-        if (type == TrainType.FREIGHT) {
-            return getFreightRoute(direction, entrySection);
-        }
-        return getPassengerRoute(direction, entrySection);
+
+    // "Check if train has next section"
+    private boolean hasNext(Train t) {
+        return t.routeIndex < t.route.length - 1;
     }
 
-    // -----------------------------
-    // STEP 35: Freight train routes
-    // -----------------------------
-    private List<Integer> getFreightRoute(Direction direction, int entrySection) {
-        if (direction == Direction.SOUTH) {
-            if (entrySection == 3) {
-                return Arrays.asList(3, 7, 11);
-            }
-            if (entrySection == 1) {
-                return Arrays.asList(1, 4);
-            }
-        } else {
-            if (entrySection == 11) {
-                return Arrays.asList(11, 7, 3);
-            }
-            if (entrySection == 4) {
-                return Arrays.asList(4, 1);
+    // "Get next section"
+    private int nextSection(Train t) {
+        return t.route[t.routeIndex + 1];
+    }
+
+    // "Check if train is passenger"
+    private boolean isPassenger(Train t) {
+        return !(t.entry == 1 && t.destination == 4
+              || t.entry == 3 && t.destination == 11
+              || t.entry == 4 && t.destination == 3
+              || t.entry == 11 && t.destination == 3);
+    }
+
+    // "Check crossover movement"
+    private boolean isCrossover(Train t) {
+        int current = t.currentSection;
+        int next = nextSection(t);
+        return (current == 3 && next == 7) || (current == 7 && next == 3);
+    }
+
+    // "Safety rules for movement"
+    private boolean canMove(Train t, int current, int next, boolean passengerPriority) {
+
+        // "Prevent collision"
+        if (sections.get(next) != null) return false;
+
+        // "Passenger priority over freight"
+        if (!isPassenger(t) && isCrossover(t) && passengerPriority) return false;
+
+        // "Prevent head-on swap"
+        for (Train other : activeTrains.values()) {
+            if (other == t || !hasNext(other)) continue;
+
+            if (other.currentSection == next &&
+                nextSection(other) == current) {
+                return false;
             }
         }
+
+        // "Prevent turnout conflict (section 6)"
+        if (isTurnout(current, next)) {
+            for (Train other : activeTrains.values()) {
+                if (other == t || !hasNext(other)) continue;
+
+                int oCurrent = other.currentSection;
+                int oNext = nextSection(other);
+
+                if (isTurnout(oCurrent, oNext)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    // "Check turnout movement"
+    private boolean isTurnout(int current, int next) {
+        return (current == 6 && (next == 8 || next == 9))
+                || ((current == 8 || current == 9) && next == 6)
+                || (current == 10 && next == 6)
+                || (current == 6 && next == 10);
+    }
+
+    // "Route selection logic"
+    private int[] chooseRoute(int entry, int destination) {
+
+        if (entry == 1 && destination == 4) return new int[]{1, 4};
+        if (entry == 3 && destination == 11) return new int[]{3, 7, 11};
+        if (entry == 4 && destination == 3) return new int[]{4, 1, 3};
+        if (entry == 11 && destination == 3) return new int[]{11, 7, 3};
+
+        if (entry == 1 && destination == 8) return new int[]{1, 5, 6, 8};
+        if (entry == 1 && destination == 9) return new int[]{1, 5, 6, 9};
+        if (entry == 3 && destination == 8) return new int[]{3, 6, 8};
+        if (entry == 3 && destination == 9) return new int[]{3, 6, 9};
+        if (entry == 9 && destination == 2) return new int[]{9, 6, 5, 2};
+        if (entry == 10 && destination == 2) return new int[]{10, 6, 5, 2};
+        if (entry == 11 && destination == 2) return new int[]{11, 9, 6, 5, 2};
+        if (entry == 4 && destination == 2) return new int[]{4, 1, 2};
+
         return null;
     }
-
-    // -----------------------------
-    // STEP 36: Passenger train routes
-    // -----------------------------
-    private List<Integer> getPassengerRoute(Direction direction, int entrySection) {
-        if (direction == Direction.SOUTH) {
-            if (entrySection == 1) {
-                return Arrays.asList(1, 5, 6, 8);
-            }
-            if (entrySection == 3) {
-                return Arrays.asList(3, 6, 9);
-            }
-        } else {
-            if (entrySection == 9) {
-                return Arrays.asList(9, 6, 5, 2);
-            }
-            if (entrySection == 10) {
-                return Arrays.asList(10, 6, 5, 2);
-            }
-            if (entrySection == 11) {
-                return Arrays.asList(11, 9, 6, 5, 2);
-            }
-            if (entrySection == 4) {
-                return Arrays.asList(4, 1, 2);
-            }
-        }
-        return null;
-    }
-
-    // -----------------------------
-    // STEP 37: AI usage note
-    // Used AI to understand Petri-net ideas,
-    // code structure, and testing strategy
-    // -----------------------------
 }
