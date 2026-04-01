@@ -5,245 +5,306 @@ import java.util.Set;
 
 public class InterlockingImpl implements Interlocking {
 
-    // "Constant indicating train has exited system"
+    // Train has exited system
     private static final int OUT_OF_SYSTEM = -1;
 
-    // "Train class stores state and route information"
+    // Internal train object to store train state
     private static class Train {
-        String name;                 // "Train name"
-        int entry;                  // "Entry section"
-        int destination;            // "Destination section"
-        int currentSection;         // "Current position"
-        int[] route;                // "Route path"
-        int routeIndex;             // "Current index in route"
-        boolean active;             // "Is train active"
+        String name;
+        int entry;
+        int destination;
+        int currentSection;
+        boolean active;
 
-        // "Constructor initializes train properties"
-        Train(String name, int entry, int destination, int[] route) {
+        Train(String name, int entry, int destination) {
             this.name = name;
             this.entry = entry;
             this.destination = destination;
             this.currentSection = entry;
-            this.route = route;
-            this.routeIndex = 0;
             this.active = true;
         }
     }
 
-    // "Map storing section occupancy"
+    // Map: section number -> train name occupying it
     private final Map<Integer, String> sections;
 
-    // "Active trains in system"
+    // Map: active train name -> train object
     private final Map<String, Train> activeTrains;
 
-    // "All trains ever added (used to track exited trains)"
+    // Keeps all train names ever added so exited trains can return -1
     private final Set<String> allTrainNames;
 
-    // "Constructor initializes empty track sections"
+    // Constructor initializes all 11 sections as empty
     public InterlockingImpl() {
         sections = new HashMap<>();
         activeTrains = new HashMap<>();
         allTrainNames = new HashSet<>();
 
-        // "Initialize sections 1 to 11 as empty"
         for (int i = 1; i <= 11; i++) {
             sections.put(i, null);
         }
     }
 
-    // "Add train to system"
     @Override
-    public void addTrain(String trainName, int entry, int destination) {
-
-        // "Validate train name"
+    public void addTrain(String trainName, int entryTrackSection, int destinationTrackSection) {
+        // Validate train name
         if (trainName == null || trainName.trim().isEmpty()) {
             throw new IllegalArgumentException();
         }
 
-        // "Validate sections"
-        if (!sections.containsKey(entry) || !sections.containsKey(destination)) {
+        // Validate section numbers
+        if (!sections.containsKey(entryTrackSection) || !sections.containsKey(destinationTrackSection)) {
             throw new IllegalArgumentException();
         }
 
-        // "Reject duplicate trains"
+        // Reject duplicate train names
         if (allTrainNames.contains(trainName) || activeTrains.containsKey(trainName)) {
             throw new IllegalArgumentException();
         }
 
-        // "Check if entry section is occupied"
-        if (sections.get(entry) != null) {
+        // Reject occupied entry section
+        if (sections.get(entryTrackSection) != null) {
             throw new IllegalStateException();
         }
 
-        // "Get valid route"
-        int[] route = chooseRoute(entry, destination);
-        if (route == null) {
+        // Check whether the entry/destination pair is legal
+        if (!isValidJourney(entryTrackSection, destinationTrackSection)) {
             throw new IllegalArgumentException();
         }
 
-        // "Create train and store"
-        Train train = new Train(trainName, entry, destination, route);
+        // Create and register train
+        Train train = new Train(trainName, entryTrackSection, destinationTrackSection);
         activeTrains.put(trainName, train);
         allTrainNames.add(trainName);
-
-        // "Mark section occupied"
-        sections.put(entry, trainName);
+        sections.put(entryTrackSection, trainName);
     }
 
-    // "Move trains forward"
     @Override
     public int moveTrains(String[] trainNames) {
-
-        // "Validate input"
+        // Null array is invalid
         if (trainNames == null) {
             throw new IllegalArgumentException();
         }
 
-        int moved = 0;
-
-        // "Track already moved trains"
+        int movedCount = 0;
         Set<String> movedThisRound = new HashSet<>();
 
-        // "Check passenger priority at crossover"
-        boolean passengerPriority = false;
+        // Check if any passenger train needs crossover priority this round
+        boolean passengerNeedsCrossover = false;
         for (String name : trainNames) {
             Train t = activeTrains.get(name);
-            if (t != null && hasNext(t)) {
-                if (isPassenger(t) && isCrossover(t)) {
-                    passengerPriority = true;
+            if (t != null && t.active) {
+                Integer next = chooseNextSection(t);
+                if (next != null && isPassenger(t) && isCrossoverEdge(t.currentSection, next)) {
+                    passengerNeedsCrossover = true;
                     break;
                 }
             }
         }
 
+        // Try moving trains in the given order
         for (String name : trainNames) {
-
-            // "Skip invalid or duplicate entries"
-            if (name == null || movedThisRound.contains(name)) continue;
-
-            Train t = activeTrains.get(name);
-
-            // "Skip if train not active"
-            if (t == null || !t.active) continue;
-
-            // "Exit logic"
-            if (!hasNext(t)) {
-                sections.put(t.currentSection, null);
-                t.currentSection = OUT_OF_SYSTEM;
-                t.active = false;
-                activeTrains.remove(name);
-
-                moved++;
-                movedThisRound.add(name);
+            // Ignore null names and duplicate names in same round
+            if (name == null || movedThisRound.contains(name)) {
                 continue;
             }
 
-            int current = t.currentSection;
-            int next = nextSection(t);
+            Train t = activeTrains.get(name);
 
-            // "Check if movement is safe"
-            if (!canMove(t, current, next, passengerPriority)) continue;
+            // Ignore trains not active / not found
+            if (t == null || !t.active) {
+                continue;
+            }
 
-            // "Perform move"
-            sections.put(current, null);
-            t.routeIndex++;
+            Integer next = chooseNextSection(t);
+
+            // If already at destination, remove from system
+            if (next == null) {
+                if (t.currentSection == t.destination) {
+                    sections.put(t.currentSection, null);
+                    t.currentSection = OUT_OF_SYSTEM;
+                    t.active = false;
+                    activeTrains.remove(name);
+                    movedCount++;
+                    movedThisRound.add(name);
+                }
+                continue;
+            }
+
+            // Move only if safe
+            if (!canMove(t, next, passengerNeedsCrossover)) {
+                continue;
+            }
+
+            // Update occupancy
+            sections.put(t.currentSection, null);
             t.currentSection = next;
             sections.put(next, t.name);
 
-            moved++;
+            movedCount++;
             movedThisRound.add(name);
         }
 
-        return moved;
+        return movedCount;
     }
 
-    // "Get section occupancy"
     @Override
-    public String getSection(int section) {
-        if (!sections.containsKey(section)) {
+    public String getSection(int trackSection) {
+        // Invalid section
+        if (!sections.containsKey(trackSection)) {
             throw new IllegalArgumentException();
         }
-        return sections.get(section);
+        return sections.get(trackSection);
     }
 
-    // "Get train position"
     @Override
     public int getTrain(String trainName) {
-
-        // "Validate train name"
+        // Invalid train name
         if (trainName == null || trainName.trim().isEmpty()) {
             throw new IllegalArgumentException();
         }
 
+        // Active train -> return current section
         Train t = activeTrains.get(trainName);
+        if (t != null) {
+            return t.currentSection;
+        }
 
-        // "If train is active"
-        if (t != null) return t.currentSection;
+        // Exited train -> return -1
+        if (allTrainNames.contains(trainName)) {
+            return OUT_OF_SYSTEM;
+        }
 
-        // "If train exited"
-        if (allTrainNames.contains(trainName)) return OUT_OF_SYSTEM;
-
-        // "Unknown train"
+        // Unknown train
         throw new IllegalArgumentException();
     }
 
-    // -----------------------------
-    // "Helper methods"
-    // -----------------------------
-
-    // "Check if train has next section"
-    private boolean hasNext(Train t) {
-        return t.routeIndex < t.route.length - 1;
+    // Valid start/destination combinations
+    private boolean isValidJourney(int entry, int destination) {
+        return (entry == 1 && destination == 4)
+            || (entry == 1 && destination == 8)
+            || (entry == 1 && destination == 9)
+            || (entry == 3 && destination == 8)
+            || (entry == 3 && destination == 9)
+            || (entry == 3 && destination == 11)
+            || (entry == 4 && destination == 2)
+            || (entry == 4 && destination == 3)
+            || (entry == 9 && destination == 2)
+            || (entry == 10 && destination == 2)
+            || (entry == 11 && destination == 2)
+            || (entry == 11 && destination == 3);
     }
 
-    // "Get next section"
-    private int nextSection(Train t) {
-        return t.route[t.routeIndex + 1];
-    }
-
-    // "Check if train is passenger"
+    // Freight routes are these four; everything else is passenger
     private boolean isPassenger(Train t) {
-        return !(t.entry == 1 && t.destination == 4
-              || t.entry == 3 && t.destination == 11
-              || t.entry == 4 && t.destination == 3
-              || t.entry == 11 && t.destination == 3);
+        return !((t.entry == 1 && t.destination == 4)
+              || (t.entry == 3 && t.destination == 11)
+              || (t.entry == 4 && t.destination == 3)
+              || (t.entry == 11 && t.destination == 3));
     }
 
-    // "Check crossover movement"
-    private boolean isCrossover(Train t) {
+    // Chooses next section dynamically, one step at a time
+    private Integer chooseNextSection(Train t) {
         int current = t.currentSection;
-        int next = nextSection(t);
-        return (current == 3 && next == 7) || (current == 7 && next == 3);
+        int destination = t.destination;
+
+        // Already at destination
+        if (current == destination) {
+            return null;
+        }
+
+        switch (current) {
+            case 1:
+                if (destination == 4) return 4;
+                if (destination == 8 || destination == 9) return 5;
+                break;
+
+            case 3:
+                if (destination == 11) return 7;
+                if (destination == 8 || destination == 9) return 6;
+                break;
+
+            case 4:
+                if (destination == 2 || destination == 3) return 1;
+                break;
+
+            case 5:
+                return 6;
+
+            case 6:
+                if (destination == 8) return 8;
+                if (destination == 9) return 9;
+                if (destination == 2) return 5;
+                break;
+
+            case 7:
+                if (destination == 11) return 11;
+                if (destination == 3) return 3;
+                break;
+
+            case 9:
+                if (destination == 2) return 6;
+                break;
+
+            case 10:
+                if (destination == 2) return 6;
+                break;
+
+            case 11:
+                if (destination == 2) return 9;
+                if (destination == 3) return 7;
+                break;
+
+            default:
+                break;
+        }
+
+        return null;
     }
 
-    // "Safety rules for movement"
-    private boolean canMove(Train t, int current, int next, boolean passengerPriority) {
+    // Safety rules before movement
+    private boolean canMove(Train t, int next, boolean passengerNeedsCrossover) {
+        int current = t.currentSection;
 
-        // "Prevent collision"
-        if (sections.get(next) != null) return false;
+        // Block if next section occupied
+        if (sections.get(next) != null) {
+            return false;
+        }
 
-        // "Passenger priority over freight"
-        if (!isPassenger(t) && isCrossover(t) && passengerPriority) return false;
+        // Freight must wait if passenger needs crossover
+        if (!isPassenger(t) && isCrossoverEdge(current, next) && passengerNeedsCrossover) {
+            return false;
+        }
 
-        // "Prevent head-on swap"
+        // Prevent head-on swap
         for (Train other : activeTrains.values()) {
-            if (other == t || !hasNext(other)) continue;
+            if (other == t || !other.active) {
+                continue;
+            }
 
-            if (other.currentSection == next &&
-                nextSection(other) == current) {
+            Integer otherNext = chooseNextSection(other);
+            if (otherNext == null) {
+                continue;
+            }
+
+            if (other.currentSection == next && otherNext == current) {
                 return false;
             }
         }
 
-        // "Prevent turnout conflict (section 6)"
-        if (isTurnout(current, next)) {
+        // Prevent two trains using turnout near section 6 at once
+        if (isTurnoutEdge(current, next)) {
             for (Train other : activeTrains.values()) {
-                if (other == t || !hasNext(other)) continue;
+                if (other == t || !other.active) {
+                    continue;
+                }
 
-                int oCurrent = other.currentSection;
-                int oNext = nextSection(other);
+                Integer otherNext = chooseNextSection(other);
+                if (otherNext == null) {
+                    continue;
+                }
 
-                if (isTurnout(oCurrent, oNext)) {
+                if (isTurnoutEdge(other.currentSection, otherNext)) {
                     return false;
                 }
             }
@@ -252,31 +313,19 @@ public class InterlockingImpl implements Interlocking {
         return true;
     }
 
-    // "Check turnout movement"
-    private boolean isTurnout(int current, int next) {
-        return (current == 6 && (next == 8 || next == 9))
-                || ((current == 8 || current == 9) && next == 6)
-                || (current == 10 && next == 6)
-                || (current == 6 && next == 10);
+    // Crossover edge between sections 3 and 7
+    private boolean isCrossoverEdge(int current, int next) {
+        return (current == 3 && next == 7) || (current == 7 && next == 3);
     }
 
-    // "Route selection logic"
-    private int[] chooseRoute(int entry, int destination) {
-
-        if (entry == 1 && destination == 4) return new int[]{1, 4};
-        if (entry == 3 && destination == 11) return new int[]{3, 7, 11};
-        if (entry == 4 && destination == 3) return new int[]{4, 1, 3};
-        if (entry == 11 && destination == 3) return new int[]{11, 7, 3};
-
-        if (entry == 1 && destination == 8) return new int[]{1, 5, 6, 8};
-        if (entry == 1 && destination == 9) return new int[]{1, 5, 6, 9};
-        if (entry == 3 && destination == 8) return new int[]{3, 6, 8};
-        if (entry == 3 && destination == 9) return new int[]{3, 6, 9};
-        if (entry == 9 && destination == 2) return new int[]{9, 6, 5, 2};
-        if (entry == 10 && destination == 2) return new int[]{10, 6, 5, 2};
-        if (entry == 11 && destination == 2) return new int[]{11, 9, 6, 5, 2};
-        if (entry == 4 && destination == 2) return new int[]{4, 1, 2};
-
-        return null;
+    // Turnout-related edges around section 6
+    private boolean isTurnoutEdge(int current, int next) {
+        return (current == 6 && (next == 8 || next == 9))
+            || ((current == 8 || current == 9) && next == 6)
+            || (current == 10 && next == 6)
+            || (current == 6 && next == 10)
+            || (current == 9 && next == 6)
+            || (current == 5 && next == 6)
+            || (current == 6 && next == 5);
     }
 }
