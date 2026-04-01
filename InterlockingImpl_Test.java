@@ -64,7 +64,7 @@ public class InterlockingImpl_Test {
         Interlocking i = new InterlockingImpl();
 
         try {
-            i.addTrain("T1", 1, 2);
+            i.addTrain("T1", 2, 11);
             fail();
         } catch (IllegalArgumentException e) {
             assertTrue(true);
@@ -175,6 +175,20 @@ public class InterlockingImpl_Test {
         i.moveTrains(new String[]{"F1"});
 
         assertEquals(3, i.getTrain("F1"));
+    }
+
+    @Test
+    public void testThreeToFourRoute() {
+        Interlocking i = new InterlockingImpl();
+        i.addTrain("X1", 3, 4);
+
+        i.moveTrains(new String[]{"X1"}); // 3 -> 7
+        i.moveTrains(new String[]{"X1"}); // 7 -> 6
+        i.moveTrains(new String[]{"X1"}); // 6 -> 5
+        i.moveTrains(new String[]{"X1"}); // 5 -> 1
+        i.moveTrains(new String[]{"X1"}); // 1 -> 4
+
+        assertEquals(4, i.getTrain("X1"));
     }
 
     @Test

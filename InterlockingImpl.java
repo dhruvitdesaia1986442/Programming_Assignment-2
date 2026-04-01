@@ -1,5 +1,6 @@
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -95,11 +96,8 @@ public class InterlockingImpl implements Interlocking {
         }
 
         int movedCount = 0;
-        Set<String> movedThisRound = new HashSet<>();
-        Set<String> usedEdgesThisRound = new HashSet<>();
-
-        boolean section6UsedThisRound = false;
-        boolean section7UsedThisRound = false;
+        Set<String> processedNames = new HashSet<>();
+        Map<String, int[]> plannedMoves = new LinkedHashMap<>();
 
         boolean passengerNeedsSection7 = false;
         for (String name : trainNames) {
@@ -119,11 +117,11 @@ public class InterlockingImpl implements Interlocking {
             }
         }
 
+        // Phase 1: decide exits and safe moves
         for (String name : trainNames) {
-            if (name == null || movedThisRound.contains(name)) {
+            if (name == null || !processedNames.add(name)) {
                 continue;
             }
-            movedThisRound.add(name);
 
             Train train = activeTrains.get(name);
             if (train == null || !train.active) {
@@ -133,35 +131,37 @@ public class InterlockingImpl implements Interlocking {
             int current = train.getCurrentSection();
             Integer next = train.getNextSection();
 
-            // If already at destination, this move exits the train.
+            // Already at destination: this move exits the train
             if (next == null) {
-                if (train.isAtDestination()) {
-                    sections.put(current, null);
-                    train.exitSystem();
-                    activeTrains.remove(name);
-                    movedCount++;
-                }
+                sections.put(current, null);
+                train.exitSystem();
+                activeTrains.remove(name);
+                movedCount++;
                 continue;
             }
 
-            if (!canMove(train, next, usedEdgesThisRound,
-                    section6UsedThisRound, section7UsedThisRound, passengerNeedsSection7)) {
+            if (canMove(train, next, plannedMoves, passengerNeedsSection7)) {
+                plannedMoves.put(name, new int[]{current, next});
+            }
+        }
+
+        // Phase 2: apply planned moves
+        for (Map.Entry<String, int[]> entry : plannedMoves.entrySet()) {
+            String name = entry.getKey();
+            int[] move = entry.getValue();
+
+            Train train = activeTrains.get(name);
+            if (train == null || !train.active) {
                 continue;
             }
+
+            int current = move[0];
+            int next = move[1];
 
             sections.put(current, null);
             train.moveForward();
-            sections.put(train.getCurrentSection(), train.name);
+            sections.put(next, name);
             movedCount++;
-
-            usedEdgesThisRound.add(edgeKey(current, next));
-
-            if (usesSection6(current, next)) {
-                section6UsedThisRound = true;
-            }
-            if (usesSection7(current, next)) {
-                section7UsedThisRound = true;
-            }
         }
 
         return movedCount;
@@ -190,12 +190,21 @@ public class InterlockingImpl implements Interlocking {
     }
 
     private int[] getRoute(int entry, int destination) {
+        // Temporary/self-stop cases
+        if (entry == 1 && destination == 1) return new int[]{1};
+        if (entry == 3 && destination == 3) return new int[]{3};
+        if (entry == 4 && destination == 4) return new int[]{4};
+        if (entry == 9 && destination == 9) return new int[]{9};
+        if (entry == 10 && destination == 10) return new int[]{10};
+        if (entry == 11 && destination == 11) return new int[]{11};
+
         // From 1
         if (entry == 1 && destination == 4) return new int[]{1, 4};
         if (entry == 1 && destination == 8) return new int[]{1, 5, 6, 8};
         if (entry == 1 && destination == 9) return new int[]{1, 5, 6, 9};
 
         // From 3
+        if (entry == 3 && destination == 4) return new int[]{3, 7, 6, 5, 1, 4};
         if (entry == 3 && destination == 8) return new int[]{3, 6, 8};
         if (entry == 3 && destination == 9) return new int[]{3, 6, 9};
         if (entry == 3 && destination == 11) return new int[]{3, 7, 11};
@@ -217,41 +226,54 @@ public class InterlockingImpl implements Interlocking {
         return null;
     }
 
-    private boolean canMove(
-            Train train,
-            int next,
-            Set<String> usedEdgesThisRound,
-            boolean section6UsedThisRound,
-            boolean section7UsedThisRound,
-            boolean passengerNeedsSection7) {
-
+    private boolean canMove(Train train, int next, Map<String, int[]> plannedMoves, boolean passengerNeedsSection7) {
         int current = train.getCurrentSection();
 
+        // Must be empty now
         if (sections.get(next) != null) {
             return false;
         }
 
-        // Prevent direct opposite-edge swap in same round
-        if (usedEdgesThisRound.contains(edgeKey(next, current))) {
-            return false;
-        }
-
-        // Shared area around 6: allow only one move using section 6 per round
-        if (usesSection6(current, next) && section6UsedThisRound) {
-            return false;
-        }
-
-        // Shared area around 7: allow only one move using section 7 per round
-        if (usesSection7(current, next) && section7UsedThisRound) {
-            return false;
-        }
-
-        // Passenger priority only on section 7
+        // Passenger priority on section 7
         if (!isPassenger(train) && usesSection7(current, next) && passengerNeedsSection7) {
             return false;
         }
 
+        // Check already planned moves
+        for (int[] otherMove : plannedMoves.values()) {
+            int otherFrom = otherMove[0];
+            int otherTo = otherMove[1];
+
+            if (conflicts(current, next, otherFrom, otherTo)) {
+                return false;
+            }
+        }
+
         return true;
+    }
+
+    private boolean conflicts(int from1, int to1, int from2, int to2) {
+        // Same destination section
+        if (to1 == to2) {
+            return true;
+        }
+
+        // Direct reverse swap
+        if (from1 == to2 && from2 == to1) {
+            return true;
+        }
+
+        // Relaxed section 6 rule: only if both want to enter 6
+        if (to1 == 6 && to2 == 6) {
+            return true;
+        }
+
+        // Relaxed section 7 rule: only if both want to enter 7
+        if (to1 == 7 && to2 == 7) {
+            return true;
+        }
+
+        return false;
     }
 
     private boolean isPassenger(Train train) {
@@ -261,16 +283,8 @@ public class InterlockingImpl implements Interlocking {
               || (train.entry == 11 && train.destination == 3));
     }
 
-    private boolean usesSection6(int current, int next) {
-        return current == 6 || next == 6;
-    }
-
     private boolean usesSection7(int current, int next) {
         return current == 7 || next == 7;
-    }
-
-    private String edgeKey(int from, int to) {
-        return from + "->" + to;
     }
 
     private void validateTrainName(String trainName) {
