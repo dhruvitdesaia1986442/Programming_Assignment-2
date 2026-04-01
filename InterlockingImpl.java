@@ -1,4 +1,3 @@
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -6,14 +5,14 @@ import java.util.Set;
 
 public class InterlockingImpl implements Interlocking {
 
-    // Returned by getTrain() after a train has exited the system
-    private static final int EXITED = -1;
+    // Returned by getTrain when a known train has exited the railway
+    private static final int OUT_OF_SYSTEM = -1;
 
     /**
      * Internal train record.
-     * Each train stores its full legal route and its current index on that route.
+     * Each train stores its complete fixed route and current position on that route.
      */
-    private static final class Train {
+    private static class Train {
         private final String name;
         private final int entry;
         private final int destination;
@@ -22,7 +21,7 @@ public class InterlockingImpl implements Interlocking {
         private int routeIndex;
         private boolean active;
 
-        private Train(String name, int entry, int destination, int[] route) {
+        Train(String name, int entry, int destination, int[] route) {
             this.name = name;
             this.entry = entry;
             this.destination = destination;
@@ -31,51 +30,46 @@ public class InterlockingImpl implements Interlocking {
             this.active = true;
         }
 
-        private int getCurrentSection() {
-            return active ? route[routeIndex] : EXITED;
+        int getCurrentSection() {
+            return route[routeIndex];
         }
 
-        private boolean isAtDestination() {
-            return active && routeIndex == route.length - 1;
-        }
-
-        private Integer getNextSection() {
-            if (!active || isAtDestination()) {
+        Integer getNextSection() {
+            if (routeIndex >= route.length - 1) {
                 return null;
             }
             return route[routeIndex + 1];
         }
 
-        private void advance() {
+        boolean isAtDestination() {
+            return routeIndex == route.length - 1;
+        }
+
+        void moveForward() {
             routeIndex++;
         }
 
-        private void exitSystem() {
+        void exitSystem() {
             active = false;
-            routeIndex = route.length - 1;
         }
     }
 
-    // Track section -> occupying train name
-    private final Map<Integer, String> sectionOccupancy;
+    // Section number -> occupying train name
+    private final Map<Integer, String> sections;
 
-    // Currently active trains
+    // Active trains currently in the system
     private final Map<String, Train> activeTrains;
 
-    // All train names ever added, so exited trains can still return -1
-    private final Set<String> knownTrainNames;
-
-    // All valid journeys and their full routes
-    private final Map<String, int[]> validRoutes;
+    // All trains ever added, so exited trains can still return -1
+    private final Set<String> allTrainNames;
 
     public InterlockingImpl() {
-        sectionOccupancy = new HashMap<>();
+        sections = new HashMap<>();
         activeTrains = new HashMap<>();
-        knownTrainNames = new HashSet<>();
-        validRoutes = buildValidRoutes();
+        allTrainNames = new HashSet<>();
 
         for (int section = 1; section <= 11; section++) {
-            sectionOccupancy.put(section, null);
+            sections.put(section, null);
         }
     }
 
@@ -85,101 +79,101 @@ public class InterlockingImpl implements Interlocking {
         validateSection(entryTrackSection);
         validateSection(destinationTrackSection);
 
-        if (knownTrainNames.contains(trainName)) {
+        if (allTrainNames.contains(trainName) || activeTrains.containsKey(trainName)) {
             throw new IllegalArgumentException("Duplicate train name.");
         }
 
-        String routeKey = routeKey(entryTrackSection, destinationTrackSection);
-        int[] route = validRoutes.get(routeKey);
+        if (sections.get(entryTrackSection) != null) {
+            throw new IllegalStateException("Entry section occupied.");
+        }
 
+        int[] route = getRoute(entryTrackSection, destinationTrackSection);
         if (route == null) {
             throw new IllegalArgumentException("Invalid journey.");
         }
 
-        if (sectionOccupancy.get(entryTrackSection) != null) {
-            throw new IllegalStateException("Entry section occupied.");
-        }
-
-        Train train = new Train(
-                trainName,
-                entryTrackSection,
-                destinationTrackSection,
-                Arrays.copyOf(route, route.length)
-        );
-
+        Train train = new Train(trainName, entryTrackSection, destinationTrackSection, route);
         activeTrains.put(trainName, train);
-        knownTrainNames.add(trainName);
-        sectionOccupancy.put(entryTrackSection, trainName);
+        allTrainNames.add(trainName);
+        sections.put(entryTrackSection, trainName);
     }
 
     @Override
     public int moveTrains(String[] trainNames) {
         if (trainNames == null) {
-            throw new IllegalArgumentException("Train list cannot be null.");
+            throw new IllegalArgumentException("Null train list.");
         }
 
         int movedCount = 0;
+        Set<String> processedThisRound = new HashSet<>();
+        Set<String> usedEdgesThisRound = new HashSet<>();
 
-        // Ignore duplicate names in the same move request
-        Set<String> processedNames = new HashSet<>();
+        // Shared conflict areas
+        boolean section6ConflictUsed = false;
+        boolean section7ConflictUsed = false;
 
-        // Prevent direct reverse-edge swaps inside one call
-        Set<String> usedDirectedEdges = new HashSet<>();
-
-        // Section 6 is a shared conflict area in many routes
-        boolean zoneSixUsedThisRound = false;
-
-        for (String trainName : trainNames) {
-            if (trainName == null || !processedNames.add(trainName)) {
+        // Passenger priority on crossover around section 7
+        boolean passengerNeedsCrossover = false;
+        for (String name : trainNames) {
+            if (name == null) {
                 continue;
             }
 
-            Train train = activeTrains.get(trainName);
-
-            // Unknown / exited trains are ignored
+            Train train = activeTrains.get(name);
             if (train == null || !train.active) {
                 continue;
             }
 
-            // If train is already sitting on its destination section,
-            // the next move removes it from the system.
-            if (train.isAtDestination()) {
-                int current = train.getCurrentSection();
-                sectionOccupancy.put(current, null);
-                train.exitSystem();
-                activeTrains.remove(trainName);
-                movedCount++;
+            Integer next = train.getNextSection();
+            if (next != null && usesSection7(train.getCurrentSection(), next) && isPassenger(train)) {
+                passengerNeedsCrossover = true;
+                break;
+            }
+        }
+
+        for (String name : trainNames) {
+            if (name == null || processedThisRound.contains(name)) {
+                continue;
+            }
+            processedThisRound.add(name);
+
+            Train train = activeTrains.get(name);
+            if (train == null || !train.active) {
                 continue;
             }
 
             int current = train.getCurrentSection();
-            int next = train.getNextSection();
+            Integer next = train.getNextSection();
 
-            // Next section must be empty
-            if (sectionOccupancy.get(next) != null) {
+            // If already at destination, the train exits on this move call.
+            if (next == null) {
+                if (train.isAtDestination()) {
+                    sections.put(current, null);
+                    train.exitSystem();
+                    activeTrains.remove(name);
+                    movedCount++;
+                }
                 continue;
             }
 
-            // Prevent conflicting simultaneous use of the shared turnout area near section 6
-            if (usesZoneSix(current, next) && zoneSixUsedThisRound) {
-                continue;
-            }
-
-            // Prevent direct head-on swap inside the same moveTrains() call
-            String reverseEdge = edgeKey(next, current);
-            if (usedDirectedEdges.contains(reverseEdge)) {
+            if (!canMove(train, next, passengerNeedsCrossover, usedEdgesThisRound,
+                    section6ConflictUsed, section7ConflictUsed)) {
                 continue;
             }
 
             // Perform move
-            sectionOccupancy.put(current, null);
-            sectionOccupancy.put(next, train.name);
-            train.advance();
+            sections.put(current, null);
+            train.moveForward();
+            sections.put(train.getCurrentSection(), train.name);
             movedCount++;
 
-            usedDirectedEdges.add(edgeKey(current, next));
-            if (usesZoneSix(current, next)) {
-                zoneSixUsedThisRound = true;
+            usedEdgesThisRound.add(edgeKey(current, next));
+
+            if (usesSection6(current, next)) {
+                section6ConflictUsed = true;
+            }
+            if (usesSection7(current, next)) {
+                section7ConflictUsed = true;
             }
         }
 
@@ -189,7 +183,7 @@ public class InterlockingImpl implements Interlocking {
     @Override
     public String getSection(int trackSection) {
         validateSection(trackSection);
-        return sectionOccupancy.get(trackSection);
+        return sections.get(trackSection);
     }
 
     @Override
@@ -201,44 +195,112 @@ public class InterlockingImpl implements Interlocking {
             return train.getCurrentSection();
         }
 
-        if (knownTrainNames.contains(trainName)) {
-            return EXITED;
+        if (allTrainNames.contains(trainName)) {
+            return OUT_OF_SYSTEM;
         }
 
-        throw new IllegalArgumentException("Unknown train name.");
+        throw new IllegalArgumentException("Unknown train.");
     }
 
     /**
-     * All legal journeys mapped to their full step-by-step routes.
+     * Returns the fixed legal route for each valid journey.
+     * Returns null for invalid journeys.
      */
-    private Map<String, int[]> buildValidRoutes() {
-        Map<String, int[]> routes = new HashMap<>();
-
+    private int[] getRoute(int entry, int destination) {
         // From section 1
-        routes.put(routeKey(1, 4), new int[]{1, 4});
-        routes.put(routeKey(1, 8), new int[]{1, 5, 6, 8});
-        routes.put(routeKey(1, 9), new int[]{1, 5, 6, 9});
+        if (entry == 1 && destination == 4) return new int[] {1, 4};
+        if (entry == 1 && destination == 8) return new int[] {1, 5, 6, 8};
+        if (entry == 1 && destination == 9) return new int[] {1, 5, 6, 9};
 
         // From section 3
-        routes.put(routeKey(3, 8), new int[]{3, 6, 8});
-        routes.put(routeKey(3, 9), new int[]{3, 6, 9});
-        routes.put(routeKey(3, 11), new int[]{3, 7, 11});
+        if (entry == 3 && destination == 8) return new int[] {3, 6, 8};
+        if (entry == 3 && destination == 9) return new int[] {3, 6, 9};
+        if (entry == 3 && destination == 11) return new int[] {3, 7, 11};
 
         // From section 4
-        routes.put(routeKey(4, 2), new int[]{4, 1, 5, 6, 2});
-        routes.put(routeKey(4, 3), new int[]{4, 1, 5, 6, 3});
+        if (entry == 4 && destination == 2) return new int[] {4, 1, 5, 6, 2};
+        if (entry == 4 && destination == 3) return new int[] {4, 1, 5, 6, 3};
 
         // From section 9
-        routes.put(routeKey(9, 2), new int[]{9, 6, 2});
+        if (entry == 9 && destination == 2) return new int[] {9, 6, 2};
 
         // From section 10
-        routes.put(routeKey(10, 2), new int[]{10, 6, 2});
+        if (entry == 10 && destination == 2) return new int[] {10, 6, 2};
 
         // From section 11
-        routes.put(routeKey(11, 2), new int[]{11, 9, 6, 2});
-        routes.put(routeKey(11, 3), new int[]{11, 7, 3});
+        if (entry == 11 && destination == 2) return new int[] {11, 9, 6, 2};
+        if (entry == 11 && destination == 3) return new int[] {11, 7, 3};
 
-        return routes;
+        return null;
+    }
+
+    /**
+     * Checks whether the requested move is safe for this round.
+     */
+    private boolean canMove(
+            Train train,
+            int next,
+            boolean passengerNeedsCrossover,
+            Set<String> usedEdgesThisRound,
+            boolean section6ConflictUsed,
+            boolean section7ConflictUsed) {
+
+        int current = train.getCurrentSection();
+
+        // Next section must be free right now.
+        if (sections.get(next) != null) {
+            return false;
+        }
+
+        // Block reverse edge use in same move cycle.
+        if (usedEdgesThisRound.contains(edgeKey(next, current))) {
+            return false;
+        }
+
+        // Passenger has priority on section 7 crossover.
+        if (!isPassenger(train) && usesSection7(current, next) && passengerNeedsCrossover) {
+            return false;
+        }
+
+        // Only one move through section 6 shared turnout area per cycle.
+        if (usesSection6(current, next) && section6ConflictUsed) {
+            return false;
+        }
+
+        // Only one move through section 7 shared crossover area per cycle.
+        if (usesSection7(current, next) && section7ConflictUsed) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Passenger journeys are the non-freight routes.
+     */
+    private boolean isPassenger(Train train) {
+        return !((train.entry == 1 && train.destination == 4)
+              || (train.entry == 3 && train.destination == 11)
+              || (train.entry == 4 && train.destination == 3)
+              || (train.entry == 11 && train.destination == 3));
+    }
+
+    /**
+     * Shared turnout area around section 6.
+     */
+    private boolean usesSection6(int current, int next) {
+        return current == 6 || next == 6;
+    }
+
+    /**
+     * Shared crossover area around section 7.
+     */
+    private boolean usesSection7(int current, int next) {
+        return current == 7 || next == 7;
+    }
+
+    private String edgeKey(int from, int to) {
+        return from + "->" + to;
     }
 
     private void validateTrainName(String trainName) {
@@ -248,24 +310,8 @@ public class InterlockingImpl implements Interlocking {
     }
 
     private void validateSection(int trackSection) {
-        if (!sectionOccupancy.containsKey(trackSection)) {
+        if (!sections.containsKey(trackSection)) {
             throw new IllegalArgumentException("Invalid section.");
         }
-    }
-
-    private String routeKey(int entry, int destination) {
-        return entry + "->" + destination;
-    }
-
-    private String edgeKey(int from, int to) {
-        return from + ":" + to;
-    }
-
-    /**
-     * Shared turnout/conflict area around section 6.
-     * Hidden tests often check that not all trains can move through this area together.
-     */
-    private boolean usesZoneSix(int from, int to) {
-        return from == 6 || to == 6;
     }
 }
