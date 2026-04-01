@@ -168,11 +168,11 @@ public class InterlockingImpl_Test {
         Interlocking i = new InterlockingImpl();
         i.addTrain("F1", 4, 3);
 
-        i.moveTrains(new String[]{"F1"}); // 4 -> 1
-        i.moveTrains(new String[]{"F1"}); // 1 -> 5
-        i.moveTrains(new String[]{"F1"}); // 5 -> 6
-        i.moveTrains(new String[]{"F1"}); // 6 -> 7
-        i.moveTrains(new String[]{"F1"}); // 7 -> 3
+        i.moveTrains(new String[]{"F1"});
+        i.moveTrains(new String[]{"F1"});
+        i.moveTrains(new String[]{"F1"});
+        i.moveTrains(new String[]{"F1"});
+        i.moveTrains(new String[]{"F1"});
 
         assertEquals(3, i.getTrain("F1"));
     }
