@@ -277,10 +277,15 @@ public class InterlockingImpl_Test {
         i.addTrain("t1", 1, 4);
         i.addTrain("t2", 3, 11);
 
-        assertEquals(1, i.moveTrains(new String[]{"t2"}));
+        int moved = i.moveTrains(new String[]{"t2"});
+        assertEquals(1, moved);
+        assertEquals(7, i.getTrain("t2"));
+
+        moved = i.moveTrains(new String[]{"t2"});
+        assertEquals(1, moved);
         assertEquals(11, i.getTrain("t2"));
 
-        int moved = i.moveTrains(new String[]{"t1"});
+        moved = i.moveTrains(new String[]{"t1"});
         assertEquals(0, moved);
         assertEquals(1, i.getTrain("t1"));
     }
