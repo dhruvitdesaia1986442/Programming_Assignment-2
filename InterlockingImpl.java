@@ -7,15 +7,17 @@ import java.util.Set;
 /**
  * Interlocking implementation.
  *
- * Rules used:
+ * Rules:
  * - each train follows one fixed legal route
- * - each section can contain at most one train
+ * - each section can hold at most one train
  * - in one moveTrains() call, safe moves are planned first, then applied
  * - a train already at destination exits on the next moveTrains() call
- * - movement is blocked only for real conflicts:
- *   1. next section is occupied
- *   2. two trains try to move into the same section
- *   3. two trains try to swap sections directly
+ * - movement is blocked only for:
+ *   1. occupied next section
+ *   2. same-destination conflict in the same round
+ *   3. direct swap conflict in the same round
+ *   4. two trains entering section 6 in the same round
+ *   5. two trains entering section 7 in the same round
  */
 public class InterlockingImpl implements Interlocking {
 
@@ -266,6 +268,8 @@ public class InterlockingImpl implements Interlocking {
      * 1. next section must be empty
      * 2. no two trains can move into same section in same round
      * 3. no direct swap between two sections in same round
+     * 4. no two trains may enter section 6 in same round
+     * 5. no two trains may enter section 7 in same round
      */
     private boolean canMove(Train train, int next, Map<String, int[]> plannedMoves) {
         int current = train.getCurrentSection();
@@ -275,7 +279,7 @@ public class InterlockingImpl implements Interlocking {
             return false;
         }
 
-        // Rule 2 and 3: conflict with already planned moves
+        // Rule 2, 3, 4, 5: conflict with already planned moves
         for (int[] other : plannedMoves.values()) {
             int otherFrom = other[0];
             int otherTo = other[1];
@@ -287,6 +291,16 @@ public class InterlockingImpl implements Interlocking {
 
             // Direct swap conflict
             if (current == otherTo && next == otherFrom) {
+                return false;
+            }
+
+            // Critical junction conflict: both trying to enter 6
+            if (next == 6 && otherTo == 6) {
+                return false;
+            }
+
+            // Critical junction conflict: both trying to enter 7
+            if (next == 7 && otherTo == 7) {
                 return false;
             }
         }
