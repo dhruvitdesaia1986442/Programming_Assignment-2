@@ -9,8 +9,8 @@ import java.util.Set;
  *
  * Design:
  * - Each train follows one fixed legal route.
- * - Each section holds at most one train.
- * - Safe moves are planned first, then applied.
+ * - Each section can contain at most one train.
+ * - In one moveTrains() call, safe moves are planned first, then applied.
  * - A train already at destination exits on the next moveTrains() call.
  */
 public class InterlockingImpl implements Interlocking {
@@ -38,10 +38,12 @@ public class InterlockingImpl implements Interlocking {
             this.active = true;
         }
 
+        // Returns current occupied section
         int getCurrentSection() {
             return route[routeIndex];
         }
 
+        // Returns next section in route, or null if already at destination
         Integer getNextSection() {
             if (routeIndex >= route.length - 1) {
                 return null;
@@ -49,23 +51,26 @@ public class InterlockingImpl implements Interlocking {
             return route[routeIndex + 1];
         }
 
+        // Returns true when train has reached final section in its route
         boolean isAtDestination() {
             return routeIndex == route.length - 1;
         }
 
+        // Move train one step forward in its route
         void moveForward() {
             routeIndex++;
         }
 
+        // Mark train as exited from the system
         void exitSystem() {
             active = false;
         }
     }
 
-    // section -> train name or null
+    // section number -> train name occupying it, or null if empty
     private final Map<Integer, String> sections;
 
-    // active train name -> Train
+    // active train name -> Train object
     private final Map<String, Train> activeTrains;
 
     // all train names ever added, including exited trains
@@ -76,25 +81,32 @@ public class InterlockingImpl implements Interlocking {
         activeTrains = new HashMap<>();
         allTrainNames = new HashSet<>();
 
+        // Railway sections are numbered 1 to 11
         for (int i = 1; i <= 11; i++) {
             sections.put(i, null);
         }
     }
 
+    /**
+     * Adds a train into the system at the specified entry section.
+     */
     @Override
     public void addTrain(String trainName, int entryTrackSection, int destinationTrackSection) {
         validateTrainName(trainName);
         validateSection(entryTrackSection);
         validateSection(destinationTrackSection);
 
+        // Train names must stay unique across the whole simulation
         if (allTrainNames.contains(trainName) || activeTrains.containsKey(trainName)) {
             throw new IllegalArgumentException("Duplicate train name.");
         }
 
+        // Entry section must be free
         if (sections.get(entryTrackSection) != null) {
             throw new IllegalStateException("Entry section occupied.");
         }
 
+        // Build the fixed legal route for this journey
         int[] route = getRoute(entryTrackSection, destinationTrackSection);
         if (route == null) {
             throw new IllegalArgumentException("Invalid journey.");
@@ -106,6 +118,10 @@ public class InterlockingImpl implements Interlocking {
         sections.put(entryTrackSection, trainName);
     }
 
+    /**
+     * Moves the listed trains by at most one section each.
+     * Returns the number of trains that actually moved or exited.
+     */
     @Override
     public int moveTrains(String[] trainNames) {
         if (trainNames == null) {
@@ -130,7 +146,7 @@ public class InterlockingImpl implements Interlocking {
             int current = train.getCurrentSection();
             Integer next = train.getNextSection();
 
-            // Immediate exit behavior
+            // Train already at destination exits on this call
             if (next == null) {
                 sections.put(current, null);
                 train.exitSystem();
@@ -139,12 +155,13 @@ public class InterlockingImpl implements Interlocking {
                 continue;
             }
 
+            // Otherwise try planning a safe move
             if (canMove(train, next, plannedMoves)) {
                 plannedMoves.put(name, new int[]{current, next});
             }
         }
 
-        // Phase 2: apply moves
+        // Phase 2: apply all planned moves
         for (Map.Entry<String, int[]> entry : plannedMoves.entrySet()) {
             String name = entry.getKey();
             int[] move = entry.getValue();
@@ -166,12 +183,18 @@ public class InterlockingImpl implements Interlocking {
         return movedCount;
     }
 
+    /**
+     * Returns the train name occupying a section, or null if empty.
+     */
     @Override
     public String getSection(int trackSection) {
         validateSection(trackSection);
         return sections.get(trackSection);
     }
 
+    /**
+     * Returns the current section of a train, or -1 if it has exited.
+     */
     @Override
     public int getTrain(String trainName) {
         validateTrainName(trainName);
@@ -188,8 +211,12 @@ public class InterlockingImpl implements Interlocking {
         throw new IllegalArgumentException("Unknown train.");
     }
 
+    /**
+     * Returns the fixed legal route for a valid journey.
+     * Returns null if the journey is invalid.
+     */
     private int[] getRoute(int entry, int destination) {
-        // Temporary/self-stop routes
+        // Self-stop routes
         if (entry == 1 && destination == 1) return new int[]{1};
         if (entry == 3 && destination == 3) return new int[]{3};
         if (entry == 4 && destination == 4) return new int[]{4};
@@ -225,19 +252,32 @@ public class InterlockingImpl implements Interlocking {
         return null;
     }
 
+    /**
+     * Checks whether a train can safely move to the next section.
+     *
+     * Rules:
+     * - next section must be empty
+     * - no two trains can move into the same section in the same round
+     * - two trains cannot swap sections directly in the same round
+     */
     private boolean canMove(Train train, int next, Map<String, int[]> plannedMoves) {
         int current = train.getCurrentSection();
 
+        // 1. Next section must be empty
         if (sections.get(next) != null) {
             return false;
         }
 
-        if (wouldDeadlock(train, current, next)) {
-            return false;
-        }
-
+        // 2. Prevent conflicts with already planned moves
         for (int[] other : plannedMoves.values()) {
-            if (conflicts(current, next, other[0], other[1])) {
+
+            // Same destination conflict
+            if (next == other[1]) {
+                return false;
+            }
+
+            // Swap conflict
+            if (current == other[1] && next == other[0]) {
                 return false;
             }
         }
@@ -245,62 +285,18 @@ public class InterlockingImpl implements Interlocking {
         return true;
     }
 
-    private boolean conflicts(int from1, int to1, int from2, int to2) {
-        if (to1 == to2) {
-            return true;
-        }
-
-        if (from1 == to2 && from2 == to1) {
-            return true;
-        }
-
-        return false;
-    }
-
-    private boolean wouldDeadlock(Train train, int current, int next) {
-        String self = train.name;
-
-        if (current == 4 && next == 1 && train.destination == 3) {
-            if (occupiedByOther(7, self) || occupiedByOther(3, self)) {
-                return true;
-            }
-        }
-
-        if (current == 7 && next == 3) {
-            if (occupiedByOther(3, self)) {
-                return true;
-            }
-        }
-
-        if (current == 5 && next == 6) {
-            if (train.destination == 8 && occupiedByOther(8, self)) {
-                return true;
-            }
-            if (train.destination == 9 && occupiedByOther(9, self)) {
-                return true;
-            }
-        }
-
-        if ((current == 9 || current == 10) && next == 6) {
-            if (occupiedByOther(2, self)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private boolean occupiedByOther(int section, String selfName) {
-        String occ = sections.get(section);
-        return occ != null && !occ.equals(selfName);
-    }
-
+    /**
+     * Validates train name input.
+     */
     private void validateTrainName(String trainName) {
         if (trainName == null || trainName.trim().isEmpty()) {
             throw new IllegalArgumentException("Invalid train name.");
         }
     }
 
+    /**
+     * Validates section input.
+     */
     private void validateSection(int trackSection) {
         if (!sections.containsKey(trackSection)) {
             throw new IllegalArgumentException("Invalid section.");
