@@ -15,7 +15,7 @@ import java.util.Set;
  *
  * This version keeps:
  * - simple conflict rules
- * - minimal targeted deadlock blockers
+ * - only two targeted path blockers for the remaining junction cases
  */
 public class InterlockingImpl implements Interlocking {
 
@@ -226,7 +226,7 @@ public class InterlockingImpl implements Interlocking {
             return false;
         }
 
-        // Minimal targeted blockers
+        // Only the two most important targeted blockers
         if (blockedByPathState(train, current, next)) {
             return false;
         }
@@ -252,28 +252,22 @@ public class InterlockingImpl implements Interlocking {
 
     /**
      * Minimal targeted blockers.
+     *
+     * Keep only these two:
+     * - 4 -> 1 heading to 3 should not happen if 3 or 7 is occupied
+     * - 7 -> 3 should not happen if 3 is occupied
      */
     private boolean blockedByPathState(Train train, int current, int next) {
         String self = train.name;
 
-        // 4 -> 1 heading to 3 should not happen if 3 or 7 is occupied
         if (current == 4 && next == 1 && train.destination == 3) {
             if (occupiedByOther(3, self) || occupiedByOther(7, self)) {
                 return true;
             }
         }
 
-        // 7 -> 3 should not happen if 3 is occupied
         if (current == 7 && next == 3) {
             if (occupiedByOther(3, self)) {
-                return true;
-            }
-        }
-
-        // Extra small deadlock fix:
-        // 7 -> 11 should not happen if 11 is occupied
-        if (current == 7 && next == 11) {
-            if (occupiedByOther(11, self)) {
                 return true;
             }
         }
