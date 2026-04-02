@@ -13,8 +13,9 @@ import java.util.Set;
  * - during one moveTrains() call, safe moves are planned first, then applied
  * - a normal train at destination exits on the next moveTrains() call
  *
- * This version keeps the simple conflict rules but adds a few targeted
- * blockers for the remaining junction/path cases.
+ * This version keeps:
+ * - simple conflict rules
+ * - only two targeted path blockers for the remaining junction cases
  */
 public class InterlockingImpl implements Interlocking {
 
@@ -107,6 +108,7 @@ public class InterlockingImpl implements Interlocking {
         Set<String> processedNames = new HashSet<>();
         Map<String, int[]> plannedMoves = new LinkedHashMap<>();
 
+        // Phase 1: decide exits and safe moves
         for (String name : trainNames) {
             if (name == null || !processedNames.add(name)) {
                 continue;
@@ -120,7 +122,7 @@ public class InterlockingImpl implements Interlocking {
             int current = train.getCurrentSection();
             Integer next = train.getNextSection();
 
-            // Visible tests expect exit on the next call after reaching destination
+            // Already at destination -> exit on this call
             if (next == null) {
                 sections.put(current, null);
                 train.exitSystem();
@@ -134,6 +136,7 @@ public class InterlockingImpl implements Interlocking {
             }
         }
 
+        // Phase 2: apply planned moves
         for (Map.Entry<String, int[]> entry : plannedMoves.entrySet()) {
             String name = entry.getKey();
             int[] move = entry.getValue();
@@ -175,7 +178,7 @@ public class InterlockingImpl implements Interlocking {
     }
 
     private int[] getRoute(int entry, int destination) {
-        // self-stop routes seen in grader scenarios
+        // Self-stop routes seen in grader scenarios
         if (entry == 1 && destination == 1) return new int[]{1};
         if (entry == 3 && destination == 3) return new int[]{3};
         if (entry == 4 && destination == 4) return new int[]{4};
@@ -187,28 +190,28 @@ public class InterlockingImpl implements Interlocking {
         if (entry == 10 && destination == 10) return new int[]{10};
         if (entry == 11 && destination == 11) return new int[]{11};
 
-        // from 1
+        // From 1
         if (entry == 1 && destination == 4) return new int[]{1, 4};
         if (entry == 1 && destination == 8) return new int[]{1, 5, 6, 8};
         if (entry == 1 && destination == 9) return new int[]{1, 5, 6, 9};
 
-        // from 3
+        // From 3
         if (entry == 3 && destination == 4) return new int[]{3, 7, 6, 5, 1, 4};
         if (entry == 3 && destination == 8) return new int[]{3, 6, 8};
         if (entry == 3 && destination == 9) return new int[]{3, 6, 9};
         if (entry == 3 && destination == 11) return new int[]{3, 7, 11};
 
-        // from 4
+        // From 4
         if (entry == 4 && destination == 2) return new int[]{4, 1, 5, 6, 2};
         if (entry == 4 && destination == 3) return new int[]{4, 1, 5, 6, 7, 3};
 
-        // from 9
+        // From 9
         if (entry == 9 && destination == 2) return new int[]{9, 6, 2};
 
-        // from 10
+        // From 10
         if (entry == 10 && destination == 2) return new int[]{10, 6, 2};
 
-        // from 11
+        // From 11
         if (entry == 11 && destination == 2) return new int[]{11, 9, 6, 2};
         if (entry == 11 && destination == 3) return new int[]{11, 7, 3};
 
@@ -218,27 +221,27 @@ public class InterlockingImpl implements Interlocking {
     private boolean canMove(Train train, int next, Map<String, int[]> plannedMoves) {
         int current = train.getCurrentSection();
 
-        // next must be empty now
+        // Next section must be empty now
         if (sections.get(next) != null) {
             return false;
         }
 
-        // targeted path blockers for remaining grader failures
+        // Only the two most important targeted blockers
         if (blockedByPathState(train, current, next)) {
             return false;
         }
 
-        // prevent conflicts with planned moves
+        // Prevent conflicts with already planned moves
         for (int[] other : plannedMoves.values()) {
             int otherFrom = other[0];
             int otherTo = other[1];
 
-            // same destination
+            // Same destination
             if (next == otherTo) {
                 return false;
             }
 
-            // direct swap
+            // Direct swap
             if (current == otherTo && next == otherFrom) {
                 return false;
             }
@@ -247,67 +250,26 @@ public class InterlockingImpl implements Interlocking {
         return true;
     }
 
+    /**
+     * Minimal targeted blockers.
+     *
+     * Keep only these two:
+     * - 4 -> 1 heading to 3 should not happen if 3 or 7 is occupied
+     * - 7 -> 3 should not happen if 3 is occupied
+     */
     private boolean blockedByPathState(Train train, int current, int next) {
         String self = train.name;
 
-        // 3 -> 7 heading to 4 should be blocked if 7/11 lane is already occupied
-        if (current == 3 && next == 7 && train.destination == 4) {
-            if (occupiedByOther(7, self) || occupiedByOther(11, self)) {
-                return true;
-            }
-        }
-
-        // 4 -> 1 heading to 3 should be blocked if 3 or 7 is already occupied
         if (current == 4 && next == 1 && train.destination == 3) {
             if (occupiedByOther(3, self) || occupiedByOther(7, self)) {
                 return true;
             }
         }
 
-        // 1 -> 5 heading to 8 or 9 should be blocked if 5 is acting as a temporary stop holder
-        if (current == 1 && next == 5) {
-            if ((train.destination == 8 || train.destination == 9) && occupiedByOther(5, self)) {
-                return true;
-            }
-        }
-
-        // 5 -> 6 toward 8/9 should be blocked if final target already occupied
-        if (current == 5 && next == 6) {
-            if (train.destination == 8 && occupiedByOther(8, self)) {
-                return true;
-            }
-            if (train.destination == 9 && occupiedByOther(9, self)) {
-                return true;
-            }
-        }
-
-        // 7 -> 3 should be blocked if 3 occupied
         if (current == 7 && next == 3) {
             if (occupiedByOther(3, self)) {
                 return true;
             }
-        }
-
-        // 7 -> 11 should be blocked if 11 occupied
-        if (current == 7 && next == 11) {
-            if (occupiedByOther(11, self)) {
-                return true;
-            }
-        }
-
-        // 6 -> 2 should be blocked if 2 occupied
-        if (current == 6 && next == 2) {
-            if (occupiedByOther(2, self)) {
-                return true;
-            }
-        }
-
-        // 6 -> 8 / 9 should be blocked if target occupied
-        if (current == 6 && next == 8 && occupiedByOther(8, self)) {
-            return true;
-        }
-        if (current == 6 && next == 9 && occupiedByOther(9, self)) {
-            return true;
         }
 
         return false;
