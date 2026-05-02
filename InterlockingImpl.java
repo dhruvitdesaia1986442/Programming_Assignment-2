@@ -9,16 +9,14 @@ public class InterlockingImpl implements Interlocking {
         int entry;
         int destination;
         int[] route;
-        int index;
-        boolean active;
+        int index = 0;
+        boolean active = true;
 
         Train(String name, int entry, int destination, int[] route) {
             this.name = name;
             this.entry = entry;
             this.destination = destination;
             this.route = route;
-            this.index = 0;
-            this.active = true;
         }
 
         int current() {
@@ -26,7 +24,9 @@ public class InterlockingImpl implements Interlocking {
         }
 
         Integer next() {
-            if (index >= route.length - 1) return null;
+            if (index >= route.length - 1) {
+                return null;
+            }
             return route[index + 1];
         }
 
@@ -64,11 +64,13 @@ public class InterlockingImpl implements Interlocking {
         }
 
         int[] route = getRoute(entryTrackSection, destinationTrackSection);
+
         if (route == null) {
             throw new IllegalArgumentException("Invalid route.");
         }
 
         Train train = new Train(trainName, entryTrackSection, destinationTrackSection, route);
+
         trains.put(trainName, train);
         allNames.add(trainName);
         sections.put(entryTrackSection, trainName);
@@ -89,9 +91,12 @@ public class InterlockingImpl implements Interlocking {
             }
         }
 
-        requested.sort((a, b) ->
-                Boolean.compare(isPassengerPriorityMove(trains.get(b)), isPassengerPriorityMove(trains.get(a)))
-        );
+        // Passenger-priority trains are planned first.
+        requested.sort((a, b) -> {
+            Train ta = trains.get(a);
+            Train tb = trains.get(b);
+            return Boolean.compare(isPassengerPriorityMove(tb), isPassengerPriorityMove(ta));
+        });
 
         Set<String> requestedSet = new HashSet<>(requested);
         Map<String, int[]> plannedMoves = new LinkedHashMap<>();
@@ -117,17 +122,32 @@ public class InterlockingImpl implements Interlocking {
                 continue;
             }
 
-            // Same destination: keep already-planned train, block current train only.
-            if (hasSameDestination(next, plannedMoves)) {
-                blocked.add(name);
-                continue;
-            }
+            String conflictTrain = findConflict(current, next, plannedMoves);
 
-            // Swap conflict: block both trains.
-            String swapTrain = findSwapConflict(current, next, plannedMoves);
-            if (swapTrain != null) {
-                plannedMoves.remove(swapTrain);
-                blocked.add(swapTrain);
+            if (conflictTrain != null) {
+                Train other = trains.get(conflictTrain);
+
+                // If both want section 7, passenger-priority movement wins.
+                if (next == 7 && other != null) {
+                    boolean currentPassenger = isPassengerPriorityMove(train);
+                    boolean otherPassenger = isPassengerPriorityMove(other);
+
+                    if (currentPassenger && !otherPassenger) {
+                        plannedMoves.remove(conflictTrain);
+                        blocked.add(conflictTrain);
+                        plannedMoves.put(name, new int[]{current, next});
+                        continue;
+                    }
+
+                    if (!currentPassenger && otherPassenger) {
+                        blocked.add(name);
+                        continue;
+                    }
+                }
+
+                // Default collision/deadlock rule: same destination or swap blocks both.
+                plannedMoves.remove(conflictTrain);
+                blocked.add(conflictTrain);
                 blocked.add(name);
                 continue;
             }
@@ -205,7 +225,7 @@ public class InterlockingImpl implements Interlocking {
             Set<String> plannedExits,
             Set<String> requestedSet
     ) {
-        if (isFreightPriorityBlocked(train) && hasPassengerPriorityMoveRequested(requestedSet, train.name)) {
+        if (isFreightCrossingMove(train) && hasPassengerPriorityMoveRequested(requestedSet, train.name)) {
             return false;
         }
 
@@ -217,52 +237,54 @@ public class InterlockingImpl implements Interlocking {
             }
         }
 
-        if (train.current() == 7 && next == 3 && occupiedByOther(3, train.name)) {
-            return false;
-        }
-
         return true;
     }
 
-    private boolean hasSameDestination(int to, Map<String, int[]> plannedMoves) {
-        for (int[] move : plannedMoves.values()) {
-            if (to == move[1]) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private String findSwapConflict(int from, int to, Map<String, int[]> plannedMoves) {
+    private String findConflict(int from, int to, Map<String, int[]> plannedMoves) {
         for (Map.Entry<String, int[]> entry : plannedMoves.entrySet()) {
             int otherFrom = entry.getValue()[0];
             int otherTo = entry.getValue()[1];
+
+            if (to == otherTo) {
+                return entry.getKey();
+            }
 
             if (from == otherTo && to == otherFrom) {
                 return entry.getKey();
             }
         }
+
         return null;
     }
 
     private boolean isPassengerPriorityMove(Train train) {
-        if (train == null || !train.active) return false;
+        if (train == null || !train.active) {
+            return false;
+        }
 
         Integer next = train.next();
-        if (next == null) return false;
+
+        if (next == null) {
+            return false;
+        }
 
         int current = train.current();
 
         return (current == 1 && next == 5)
                 || (current == 5 && next == 6)
-                || (current == 6 && next == 2);
+                || (current == 6 && next == 2)
+                || (current == 11 && next == 7)
+                || (current == 7 && next == 3);
     }
 
     private boolean hasPassengerPriorityMoveRequested(Set<String> requestedSet, String selfName) {
         for (String name : requestedSet) {
-            if (name.equals(selfName)) continue;
+            if (name.equals(selfName)) {
+                continue;
+            }
 
             Train train = trains.get(name);
+
             if (isPassengerPriorityMove(train)) {
                 return true;
             }
@@ -271,24 +293,43 @@ public class InterlockingImpl implements Interlocking {
         return false;
     }
 
-    private boolean isFreightPriorityBlocked(Train train) {
-        if (train == null || !train.active) return false;
+    private boolean isFreightCrossingMove(Train train) {
+        if (train == null || !train.active) {
+            return false;
+        }
 
         Integer next = train.next();
-        if (next == null) return false;
+
+        if (next == null) {
+            return false;
+        }
 
         int current = train.current();
 
+        boolean freightRoute =
+                (train.entry == 3 && train.destination == 4)
+                || (train.entry == 4 && train.destination == 3);
+
+        if (!freightRoute) {
+            return false;
+        }
+
         return (current == 3 && next == 7)
-                || (current == 4 && next == 1)
+                || (current == 7 && next == 6)
+                || (current == 6 && next == 5)
+                || (current == 5 && next == 1)
                 || (current == 1 && next == 4)
+                || (current == 4 && next == 1)
+                || (current == 1 && next == 5)
+                || (current == 5 && next == 6)
                 || (current == 6 && next == 7)
-                || (current == 7 && next == 3)
-                || (current == 7 && next == 6);
+                || (current == 7 && next == 3);
     }
 
     private int[] getRoute(int entry, int destination) {
-        if (entry == destination) return new int[]{entry};
+        if (entry == destination) {
+            return new int[]{entry};
+        }
 
         if (entry == 1 && destination == 4) return new int[]{1, 4};
         if (entry == 1 && destination == 8) return new int[]{1, 5, 6, 8};
@@ -309,11 +350,6 @@ public class InterlockingImpl implements Interlocking {
         if (entry == 11 && destination == 3) return new int[]{11, 7, 3};
 
         return null;
-    }
-
-    private boolean occupiedByOther(int section, String selfName) {
-        String occupant = sections.get(section);
-        return occupant != null && !occupant.equals(selfName);
     }
 
     private void validateName(String trainName) {
