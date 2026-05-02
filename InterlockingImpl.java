@@ -24,9 +24,7 @@ public class InterlockingImpl implements Interlocking {
         }
 
         Integer getNextSection() {
-            if (routeIndex >= route.length - 1) {
-                return null;
-            }
+            if (routeIndex >= route.length - 1) return null;
             return route[routeIndex + 1];
         }
 
@@ -64,13 +62,11 @@ public class InterlockingImpl implements Interlocking {
         }
 
         int[] route = getRoute(entryTrackSection, destinationTrackSection);
-
         if (route == null) {
             throw new IllegalArgumentException("Invalid journey.");
         }
 
         Train train = new Train(trainName, entryTrackSection, destinationTrackSection, route);
-
         activeTrains.put(trainName, train);
         allTrainNames.add(trainName);
         sections.put(entryTrackSection, trainName);
@@ -84,105 +80,82 @@ public class InterlockingImpl implements Interlocking {
 
         int movedCount = 0;
 
-        Set<String> seen = new HashSet<>();
         List<String> requested = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
 
-        // Remove duplicate requested trains while keeping order.
         for (String name : trainNames) {
             if (name != null && seen.add(name)) {
                 requested.add(name);
             }
         }
 
-        Map<String, int[]> desiredMoves = new LinkedHashMap<>();
+        // Passenger moves are planned first.
+        requested.sort((a, b) -> {
+            Train ta = activeTrains.get(a);
+            Train tb = activeTrains.get(b);
+            boolean pa = isPassengerCrossingMove(ta);
+            boolean pb = isPassengerCrossingMove(tb);
+            return Boolean.compare(pb, pa);
+        });
+
+        Set<String> requestedSet = new HashSet<>(requested);
+        Map<String, int[]> plannedMoves = new LinkedHashMap<>();
         Set<String> plannedExits = new HashSet<>();
         Set<String> blocked = new HashSet<>();
 
-        // Phase 1: collect exits and desired moves.
+        // Phase 1: plan exits and possible moves.
         for (String name : requested) {
-            Train train = activeTrains.get(name);
+            if (blocked.contains(name)) continue;
 
-            if (train == null || !train.active) {
-                continue;
-            }
+            Train train = activeTrains.get(name);
+            if (train == null || !train.active) continue;
 
             int current = train.getCurrentSection();
             Integer next = train.getNextSection();
 
-            // Train has reached the end of its route, so it exits.
             if (next == null) {
                 plannedExits.add(name);
                 continue;
             }
 
-            if (canMove(train, next, desiredMoves, plannedExits)) {
-                desiredMoves.put(name, new int[]{current, next});
-            }
-        }
-
-        // Phase 2: detect same-target and swap conflicts.
-        List<String> names = new ArrayList<>(desiredMoves.keySet());
-
-        for (int i = 0; i < names.size(); i++) {
-            for (int j = i + 1; j < names.size(); j++) {
-                String a = names.get(i);
-                String b = names.get(j);
-
-                int[] m1 = desiredMoves.get(a);
-                int[] m2 = desiredMoves.get(b);
-
-                int from1 = m1[0];
-                int to1 = m1[1];
-                int from2 = m2[0];
-                int to2 = m2[1];
-
-                // Same destination = collision risk.
-                if (to1 == to2) {
-                    blocked.add(a);
-                    blocked.add(b);
-                }
-
-                // Direct swap = collision/deadlock.
-                if (from1 == to2 && from2 == to1) {
-                    blocked.add(a);
-                    blocked.add(b);
-                }
-            }
-        }
-
-        // Phase 3: apply exits.
-        for (String name : plannedExits) {
-            if (blocked.contains(name)) {
+            if (!canMove(train, next, plannedMoves, plannedExits, requestedSet)) {
                 continue;
             }
+
+            String conflict = findPlannedConflict(current, next, plannedMoves);
+
+            if (conflict != null) {
+                plannedMoves.remove(conflict);
+                blocked.add(conflict);
+                blocked.add(name);
+                continue;
+            }
+
+            plannedMoves.put(name, new int[]{current, next});
+        }
+
+        // Phase 2: apply exits.
+        for (String name : plannedExits) {
+            if (blocked.contains(name)) continue;
 
             Train train = activeTrains.get(name);
-
-            if (train == null || !train.active) {
-                continue;
-            }
+            if (train == null || !train.active) continue;
 
             int current = train.getCurrentSection();
-
             sections.put(current, null);
             train.exitSystem();
             activeTrains.remove(name);
             movedCount++;
         }
 
-        // Phase 4: apply moves.
-        for (Map.Entry<String, int[]> entry : desiredMoves.entrySet()) {
+        // Phase 3: apply planned moves.
+        for (Map.Entry<String, int[]> entry : plannedMoves.entrySet()) {
             String name = entry.getKey();
 
-            if (blocked.contains(name)) {
-                continue;
-            }
+            if (blocked.contains(name)) continue;
 
             Train train = activeTrains.get(name);
-
-            if (train == null || !train.active) {
-                continue;
-            }
+            if (train == null || !train.active) continue;
 
             int from = entry.getValue()[0];
             int to = entry.getValue()[1];
@@ -207,7 +180,6 @@ public class InterlockingImpl implements Interlocking {
         validateTrainName(trainName);
 
         Train train = activeTrains.get(trainName);
-
         if (train != null) {
             return train.getCurrentSection();
         }
@@ -223,73 +195,69 @@ public class InterlockingImpl implements Interlocking {
             Train train,
             int next,
             Map<String, int[]> plannedMoves,
-            Set<String> plannedExits
+            Set<String> plannedExits,
+            Set<String> requestedSet
     ) {
         int current = train.getCurrentSection();
 
-        // Passenger has priority over freight near the shared junction.
-        if (isFreightCrossingRoute(train) && hasPassengerCrossingActive()) {
+        // Passenger priority only blocks freight while freight is actually on the 3/4/7 conflict area.
+        if (isFreightConflictMove(train) && hasPassengerCrossingRequested(requestedSet, train.name)) {
             return false;
         }
 
         String occupant = sections.get(next);
 
         if (occupant != null && !occupant.equals(train.name)) {
-
-            // Do not enter a section only because the current train is exiting in the same cycle.
-            if (plannedExits.contains(occupant)) {
-                return false;
-            }
-
-            // Allow only if the occupying train is already planned to move away.
-            if (!plannedMoves.containsKey(occupant)) {
+            // Stronger 110-version behaviour:
+            // allow entry if occupant is planned to move or exit in this same cycle.
+            if (!plannedMoves.containsKey(occupant) && !plannedExits.contains(occupant)) {
                 return false;
             }
         }
 
-        // Protect route 4 -> 3 if section 3 or 7 is occupied.
-        if (current == 4 && next == 1 && train.destination == 3) {
-            if (occupiedByOther(3, train.name) || occupiedByOther(7, train.name)) {
-                return false;
-            }
-        }
-
-        // Protect movement into section 3.
-        if (current == 7 && next == 3) {
-            if (occupiedByOther(3, train.name)) {
-                return false;
-            }
-        }
-
-        // Block passenger line 5 -> 6 if its final target is already occupied.
-        if (current == 5 && next == 6) {
-            if (train.destination == 8 && occupiedByOther(8, train.name)) {
-                return false;
-            }
-
-            if (train.destination == 9 && occupiedByOther(9, train.name)) {
-                return false;
-            }
+        // Protect direct entry into section 3.
+        if (current == 7 && next == 3 && occupiedByOther(3, train.name)) {
+            return false;
         }
 
         return true;
     }
 
-    private boolean hasPassengerCrossingActive() {
-        for (Train train : activeTrains.values()) {
-            if (train == null || !train.active) {
-                continue;
+    private String findPlannedConflict(int current, int next, Map<String, int[]> plannedMoves) {
+        for (Map.Entry<String, int[]> entry : plannedMoves.entrySet()) {
+            int otherFrom = entry.getValue()[0];
+            int otherTo = entry.getValue()[1];
+
+            if (next == otherTo) {
+                return entry.getKey();
             }
 
-            Integer next = train.getNextSection();
-
-            if (next == null) {
-                continue;
+            if (current == otherTo && next == otherFrom) {
+                return entry.getKey();
             }
+        }
 
-            int current = train.getCurrentSection();
+        return null;
+    }
 
-            if ((current == 1 && next == 5) || (current == 6 && next == 2)) {
+    private boolean isPassengerCrossingMove(Train train) {
+        if (train == null || !train.active) return false;
+
+        Integer next = train.getNextSection();
+        if (next == null) return false;
+
+        int current = train.getCurrentSection();
+
+        return (current == 1 && next == 5)
+                || (current == 6 && next == 2);
+    }
+
+    private boolean hasPassengerCrossingRequested(Set<String> requestedSet, String selfName) {
+        for (String name : requestedSet) {
+            if (name.equals(selfName)) continue;
+
+            Train train = activeTrains.get(name);
+            if (isPassengerCrossingMove(train)) {
                 return true;
             }
         }
@@ -297,17 +265,13 @@ public class InterlockingImpl implements Interlocking {
         return false;
     }
 
-    private boolean isFreightCrossingRoute(Train train) {
-        if (train == null) {
-            return false;
-        }
+    private boolean isFreightConflictMove(Train train) {
+        if (train == null || !train.active) return false;
+
+        Integer next = train.getNextSection();
+        if (next == null) return false;
 
         int current = train.getCurrentSection();
-        Integer next = train.getNextSection();
-
-        if (next == null) {
-            return false;
-        }
 
         return (current == 3 && next == 7)
                 || (current == 7 && next == 6)
@@ -316,42 +280,33 @@ public class InterlockingImpl implements Interlocking {
                 || (current == 4 && next == 1);
     }
 
-    private boolean occupiedByOther(int section, String selfName) {
-        String occupant = sections.get(section);
-        return occupant != null && !occupant.equals(selfName);
-    }
-
     private int[] getRoute(int entry, int destination) {
-        if (entry == destination) {
-            return new int[]{entry};
-        }
+        if (entry == destination) return new int[]{entry};
 
-        // From section 1.
         if (entry == 1 && destination == 4) return new int[]{1, 4};
         if (entry == 1 && destination == 8) return new int[]{1, 5, 6, 8};
         if (entry == 1 && destination == 9) return new int[]{1, 5, 6, 9};
 
-        // From section 3.
         if (entry == 3 && destination == 4) return new int[]{3, 7, 6, 5, 1, 4};
         if (entry == 3 && destination == 8) return new int[]{3, 6, 8};
         if (entry == 3 && destination == 9) return new int[]{3, 6, 9};
         if (entry == 3 && destination == 11) return new int[]{3, 7, 11};
 
-        // From section 4.
         if (entry == 4 && destination == 2) return new int[]{4, 1, 5, 6, 2};
         if (entry == 4 && destination == 3) return new int[]{4, 1, 5, 6, 7, 3};
 
-        // From section 9.
         if (entry == 9 && destination == 2) return new int[]{9, 6, 2};
-
-        // From section 10.
         if (entry == 10 && destination == 2) return new int[]{10, 6, 2};
 
-        // From section 11.
         if (entry == 11 && destination == 2) return new int[]{11, 9, 6, 2};
         if (entry == 11 && destination == 3) return new int[]{11, 7, 3};
 
         return null;
+    }
+
+    private boolean occupiedByOther(int section, String selfName) {
+        String occupant = sections.get(section);
+        return occupant != null && !occupant.equals(selfName);
     }
 
     private void validateTrainName(String trainName) {
