@@ -1,85 +1,60 @@
-Railway Interlocking System
-Overview
+# Railway Interlocking System 🚆
 
-This project implements a basic railway interlocking system in Java. The goal is to manage train movements safely across different track sections while preventing conflicts such as collisions or unsafe movements.
+This project implements a railway interlocking system in Java to safely manage train movements across shared track sections.
 
-Each train follows a fixed route from its entry section to its destination, and the system ensures that all movements are safe before they are executed.
+## Overview
 
-Key Features
-Only one train is allowed in each section at any time
-Trains move one section at a time
-All moves are checked before being applied
-Invalid routes are rejected
-Trains exit the system once they reach their destination
-How the System Works
-Train Movement
+The system ensures that trains move through predefined routes without causing collisions, deadlocks, or unsafe conflicts. It simulates real-world railway interlocking logic by controlling section occupancy and movement permissions.
 
-The system uses a two-step process when moving trains:
+## Features
 
-First, it checks which trains can move safely
-Then, it moves all valid trains together
+- Route-based train movement  
+- Section occupancy tracking (only one train per section)  
+- Collision prevention  
+- Deadlock avoidance  
+- Passenger priority at shared junctions  
+- Exit handling for completed routes  
 
-This avoids situations where one train moves and causes a conflict for another in the same cycle.
+## Petri-net Design
 
-Route Handling
+The system is modelled using a Petri-net approach:
 
-Each train follows a predefined route depending on its entry and destination.
+- **Track sections** are represented as *places*  
+- **Train movements** are represented as *transitions*  
+- **Tokens** represent trains moving through the network  
 
-Example:
+The model ensures:
 
-1 → 4
-1 → 8
-3 → 4
-4 → 3
+- Only one train occupies a section at a time (collision prevention)  
+- Conflicting transitions are restricted at junctions  
+- Passenger trains are prioritised at the crossover section (section 7)  
+- Deadlock is minimised by controlling movement through shared sections  
 
-If a route is not valid, the system will throw an error.
+## Project Structure
 
-Safety Rules
+- `Interlocking.java` – Interface definition  
+- `InterlockingImpl.java` – Main implementation logic  
+- `InterlockingImpl_Test.java` – JUnit test cases  
+- `railway_diagram.pdf` – Petri-net diagram  
 
-The system prevents:
+## How to Run
 
-Two trains entering the same section
-Two trains swapping sections at the same time
-Moving into an occupied section
+### Compile
+javac -cp ".;junit-4.13.2.jar;hamcrest-core-1.3.jar" *.java
 
-There are also a few extra checks for specific junction situations to avoid unsafe movements.
 
-Exit Behaviour
-When a train reaches its destination, it exits on the next move
-After exiting, its section becomes free
-getTrain() returns -1 for exited trains
-Main Methods
-addTrain()
+### Run Tests
+java -cp ".;junit-4.13.2.jar;hamcrest-core-1.3.jar" org.junit.runner.JUnitCore InterlockingImpl_Test
 
-Adds a new train with a valid route.
 
-moveTrains()
+## Notes
 
-Moves trains safely and returns how many moved.
+- JUnit and Hamcrest libraries are required for testing  
+- The implementation prioritises correctness and safety over performance  
+- Designed to satisfy assignment constraints and autograder scenarios  
 
-getSection()
+## Author
 
-Returns the train in a section (or null if empty).
-
-getTrain()
-
-Returns the current section of a train, or -1 if it has exited.
-
-How to Run
-
-Compile:
-
-javac *.java
-
-Run tests:
-
-java org.junit.runner.JUnitCore InterlockingImpl_Test
-Notes
-The implementation focuses on keeping the logic simple and stable
-Only necessary safety checks are used to avoid over-complicating the system
-The design matches the behaviour expected by the assignment tests
-Author
-
-Dhruvit Navin Desai
-Adelaide University
+Dhruvit Desai
 A1986442
+Adelaide University
